@@ -1,6 +1,6 @@
 // Notch therapy audio processing module
 
-import { getAudioContext, createWhiteNoise, createPinkNoise, createNotchFilter, createTone, getMasterGain } from './engine.js';
+import { getAudioContext, createWhiteNoise, createPinkNoise, createNotchFilter, getMasterGain } from './engine.js';
 
 let currentNodes = [];
 let isRunning = false;
@@ -9,29 +9,24 @@ export function isTherapyRunning() {
   return isRunning;
 }
 
-export function startTherapy(frequency, bandwidth = 'medium', depth = -12, carrier = 'white') {
+export function startTherapy(frequency, bandwidth = "medium", depth = -12, carrier = "white") {
   const ctx = getAudioContext();
   stopTherapy();
 
   isRunning = true;
 
-  // Create carrier noise
-  const duration = 30; // recycle every 30s
-  const buffer = carrier === 'pink' ? createPinkNoise(duration) : createWhiteNoise(duration);
+  const duration = 30;
+  const buffer = carrier === "pink" ? createPinkNoise(duration) : createWhiteNoise(duration);
   const source = ctx.createBufferSource();
   source.buffer = buffer;
   source.loop = true;
 
-  // Notch filter
   const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
   const Q = Qmap[bandwidth] || 2.0;
   const notchFilter = createNotchFilter(frequency, Q);
 
-  // Depth gain
   const depthGain = ctx.createGain();
-  // Convert dB to linear gain
-  // -3dB = 0.707, -6dB = 0.5, -12dB = 0.25, -20dB = 0.1
-  const depthMap = { '-3': 0.707, '-6': 0.5, '-12': 0.25, '-20': 0.1 };
+  const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
   depthGain.gain.value = depthMap[String(depth)] || 0.25;
 
   source.connect(notchFilter);
@@ -51,7 +46,7 @@ export function stopTherapy() {
   currentNodes = [];
 }
 
-export function updateTherapyParams(frequency, bandwidth = 'medium', depth = -12) {
+export function updateTherapyParams(frequency, bandwidth = "medium", depth = -12) {
   const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
   const notchFilter = currentNodes[1];
   const depthGain = currentNodes[2];
@@ -60,65 +55,176 @@ export function updateTherapyParams(frequency, bandwidth = 'medium', depth = -12
     notchFilter.Q.value = Qmap[bandwidth] || 2.0;
   }
   if (depthGain) {
-    const depthMap = { '-3': 0.707, '-6': 0.5, '-12': 0.25, '-20': 0.1 };
+    const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
     depthGain.gain.value = depthMap[String(depth)] || 0.25;
   }
 }
 
-// 2AFC Matching - plays two tones and lets user pick which matches their tinnitus
-// Returns: a function to generate the next trial
+// ============================================================
+// 2AFC adaptive staircase matching (improved)
+// Phase 1: Binary search across octave bands for coarse localization
+// Phase 2: Adaptive staircase with diminishing step size for fine tuning
+// Phase 3: Verification — play candidate frequency for user confirmation
+// ============================================================
+
 export function createMatchingSession() {
-  const testFrequencies = [
-    125, 250, 500, 750, 1000, 1500, 2000, 3000, 4000,
-    5000, 6000, 8000, 10000, 12000
-  ];
-  let currentFreqIndex = 0;
-  let results = [];
+  const octaveBands = [125, 250, 500, 1000, 2000, 4000, 8000, 12000];
+  let phase = "coarse";
+  let coarseLow = 0;
+  let coarseHigh = octaveBands.length - 1;
+  let currentFreqLow = 0;
+  let currentFreqHigh = 0;
+  let fineCenter = null;
+  let fineStep = null;
+  let trialCount = 0;
+  const maxFineTrials = 30;
+  let reversals = [];
+  let activeNodes = [];
 
-  function playPair(freqA, freqB) {
+  function stopActiveNodes() {
+    activeNodes.forEach(n => {
+      try { if (n.stop) n.stop(); } catch(e) {}
+      try { if (n.disconnect) n.disconnect(); } catch(e) {}
+    });
+    activeNodes = [];
+  }
+
+  function createToneNode(freq, startTime, duration, useNoise) {
     const ctx = getAudioContext();
-    const duration = 1.5;
+    if (useNoise) {
+      const bufLen = ctx.sampleRate * duration;
+      const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = freq;
+      filter.Q.value = 8;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.3;
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(getMasterGain());
+      src.start(startTime);
+      src.stop(startTime + duration);
+      return [src, filter, gain];
+    } else {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.3;
+      osc.connect(gain);
+      gain.connect(getMasterGain());
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+      return [osc, gain];
+    }
+  }
 
-    // Tone A
-    const oscA = ctx.createOscillator();
-    oscA.type = 'sine';
-    oscA.frequency.value = freqA;
-    const gainA = ctx.createGain();
-    gainA.gain.value = 0.3;
-    oscA.connect(gainA);
-    gainA.connect(getMasterGain());
-    oscA.start(ctx.currentTime);
-    oscA.stop(ctx.currentTime + duration);
-
-    // Tone B
-    const oscB = ctx.createOscillator();
-    oscB.type = 'sine';
-    oscB.frequency.value = freqB;
-    const gainB = ctx.createGain();
-    gainB.gain.value = 0.3;
-    oscB.connect(gainB);
-    gainB.connect(getMasterGain());
-    oscB.start(ctx.currentTime + duration + 1); // 1s silence between
-    oscB.stop(ctx.currentTime + 2 * duration + 1);
-
+  function playPair(freqA, freqB, useNoise) {
+    const ctx = getAudioContext();
+    stopActiveNodes();
+    const dur = 1.5;
+    const gap = 1.0;
+    const nodesA = createToneNode(freqA, ctx.currentTime, dur, useNoise);
+    const nodesB = createToneNode(freqB, ctx.currentTime + dur + gap, dur, useNoise);
+    activeNodes = [...nodesA, ...nodesB];
     return { freqA, freqB };
+  }
+
+  function getNextFreqs() {
+    if (phase === "coarse") {
+      if (coarseHigh - coarseLow <= 1) {
+        phase = "fine";
+        const lo = octaveBands[coarseLow];
+        const hi = octaveBands[coarseHigh];
+        fineCenter = Math.round(Math.sqrt(lo * hi));
+        fineStep = Math.round(fineCenter * 0.12);
+        fineStep = Math.max(fineStep, 10);
+        currentFreqLow = Math.max(20, fineCenter - fineStep);
+        currentFreqHigh = Math.min(16000, fineCenter + fineStep);
+        return { freqA: currentFreqLow, freqB: currentFreqHigh };
+      }
+      const mid = Math.floor((coarseLow + coarseHigh) / 2);
+      currentFreqLow = octaveBands[mid];
+      currentFreqHigh = octaveBands[mid + 1];
+      return { freqA: currentFreqLow, freqB: currentFreqHigh };
+    }
+    if (phase === "fine") {
+      if (trialCount >= maxFineTrials) {
+        phase = "verification";
+        return null;
+      }
+      currentFreqLow = Math.max(20, Math.round(fineCenter - fineStep));
+      currentFreqHigh = Math.min(16000, Math.round(fineCenter + fineStep));
+      return { freqA: currentFreqLow, freqB: currentFreqHigh };
+    }
+    return null;
+  }
+
+  function advance(chosenFreq) {
+    trialCount++;
+    if (phase === "coarse") {
+      const mid = Math.floor((coarseLow + coarseHigh) / 2);
+      if (chosenFreq <= octaveBands[mid]) {
+        coarseHigh = mid;
+      } else {
+        coarseLow = mid + 1;
+      }
+    } else if (phase === "fine") {
+      if (chosenFreq < fineCenter) {
+        fineCenter = Math.round((fineCenter + currentFreqLow) / 2);
+      } else {
+        fineCenter = Math.round((fineCenter + currentFreqHigh) / 2);
+      }
+      fineStep = Math.max(5, Math.round(fineStep * 0.88));
+      reversals.push(fineCenter);
+      if (reversals.length >= 6) {
+        const last6 = reversals.slice(-6);
+        const range = Math.max(...last6) - Math.min(...last6);
+        if (range / fineCenter < 0.02) {
+          phase = "verification";
+        }
+      }
+    }
+  }
+
+  function getConfidence() {
+    if (phase === "coarse") return Math.max(1, Math.min(5, Math.floor(trialCount / 2)));
+    if (phase === "fine") return Math.max(2, Math.min(5, 2 + Math.floor(trialCount / 4)));
+    if (reversals.length < 2) return 2;
+    const last6 = reversals.slice(-6);
+    const range = Math.max(...last6) - Math.min(...last6);
+    const avg = last6.reduce((a, b) => a + b, 0) / last6.length;
+    const pct = range / avg;
+    if (pct < 0.02) return 5;
+    if (pct < 0.05) return 4;
+    if (pct < 0.10) return 3;
+    return 2;
+  }
+
+  function getResult() {
+    if (reversals.length > 0) return Math.round(reversals[reversals.length - 1]);
+    if (fineCenter) return Math.round(fineCenter);
+    const lo = octaveBands[coarseLow];
+    const hi = octaveBands[Math.min(coarseHigh, octaveBands.length - 1)];
+    return Math.round((lo + hi) / 2);
   }
 
   return {
     playPair,
-    getNextFreqs() {
-      const idx = currentFreqIndex;
-      if (idx >= testFrequencies.length - 1) return null;
-      return {
-        freqA: testFrequencies[idx],
-        freqB: testFrequencies[idx + 1],
-      };
-    },
-    advance() {
-      currentFreqIndex++;
-    },
-    get totalSteps() { return testFrequencies.length; },
-    get currentStep() { return currentFreqIndex; },
-    get testFrequencies() { return testFrequencies; },
+    stopActiveNodes,
+    getNextFreqs,
+    advance,
+    get totalSteps() { return maxFineTrials + 6; },
+    get currentStep() { return trialCount; },
+    get testFrequencies() { return [currentFreqLow, currentFreqHigh]; },
+    getResult,
+    getConfidence,
+    get phase() { return phase; },
+    get fineCenter() { return fineCenter ? Math.round(fineCenter) : 0; },
   };
 }

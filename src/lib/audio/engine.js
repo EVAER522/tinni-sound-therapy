@@ -116,3 +116,9 @@ export function connectFilter(source, filter) {
   filter.connect(getMasterGain());
   return filter;
 }
+
+export function getAnalyserNode() {
+  if (!analyserNode) getAudioContext();
+  return analyserNode;
+}
+

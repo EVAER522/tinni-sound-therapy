@@ -8,7 +8,7 @@
   } from '../stores/therapy.js';
   import { isPlaying, isMicromode, records, currentMode, therapyView, onboardingComplete } from '../stores/app.js';
   import { createMatchingSession, startTherapy, stopTherapy, updateTherapyParams } from '../audio/notch.js';
-  import { getAudioContext, setMasterVolume } from '../audio/engine.js';
+  import { getAudioContext, setMasterVolume, getAnalyserNode } from '../audio/engine.js';
 
   let session;
   let currentFreqA = 0;
@@ -19,17 +19,40 @@
   let sessionElapsed = 0;
   let selectedCarrier = 'white';
 
+  // --- 2AFC noise/sine toggle ---
+  let useNoise = false;
+
+  // --- Manual matching ---
+  let manualFreq = 4000;
+  let manualPlaying = false;
+  let manualOsc = null;
+  let manualFineMode = false;
+  let manualFineCenter = 4000;
+
+  // --- Spectrum canvas ---
+  let spectrumAnimFrame = null;
+
+  // Bandwidth & depth options
   const bandwidths = [
-    { id: 'narrow', label: '窄 (1/3 oct)' },
-    { id: 'medium', label: '中 (1/2 oct)' },
-    { id: 'wide', label: '宽 (1 oct)' },
+    { id: 'narrow', label: '窄 (1/3 oct)', tip: '精确去除目标音频段，适合频率明确的耳鸣' },
+    { id: 'medium', label: '中 (1/2 oct)', tip: '平衡覆盖范围，适合大多数情况' },
+    { id: 'wide', label: '宽 (1 oct)', tip: '去除较宽频率范围，舒适度更高' },
   ];
   const depths = [
-    { id: -3, label: '-3 dB' },
-    { id: -6, label: '-6 dB' },
-    { id: -12, label: '-12 dB' },
-    { id: -20, label: '-20 dB' },
+    { id: -3, label: '-3 dB', tip: '轻微去除，最自然' },
+    { id: -6, label: '-6 dB', tip: '中度去除' },
+    { id: -12, label: '-12 dB', tip: '标准强度，推荐' },
+    { id: -20, label: '-20 dB', tip: '最强去除效果' },
   ];
+
+  // Confidence labels
+  const confidenceLabels = {
+    1: '低 — 建议完成更多轮匹配',
+    2: '偏低 — 可继续精定位提高精度',
+    3: '中等 — 频率大致准确',
+    4: '较高 — 频率较可靠',
+    5: '高 — 频率高度一致',
+  };
 
   // Daily check
   let dailyCheckDone = false;
@@ -73,6 +96,7 @@
     matchEar.set('left');
     matchResults.set({ left: null, right: null, confidence: 0 });
     matchConfidence.set(0);
+    useNoise = false;
   }
 
   // Go back
@@ -103,17 +127,18 @@
     }
   }
 
-  // 2AFC matching
+  // ==================== 2AFC Matching ====================
   function nextPair() {
     const pair = session.getNextFreqs();
     if (pair) {
       currentFreqA = pair.freqA;
       currentFreqB = pair.freqB;
-      session.playPair(pair.freqA, pair.freqB);
+      session.playPair(pair.freqA, pair.freqB, useNoise);
     } else {
       finishMatching();
     }
   }
+
   function playSingleTone(freq) {
     const ctx = getAudioContext();
     const osc = ctx.createOscillator();
@@ -126,27 +151,24 @@
     osc.start();
     osc.stop(ctx.currentTime + 1.5);
   }
+
   function chooseFreq(chosen) {
     matchFreqResult = chosen;
-    session.advance();
+    session.advance(chosen);
     matchStep.set(session.currentStep);
-    const pct = Math.min(session.currentStep / session.totalSteps, 1);
-    matchConfidence.set(Math.max(1, Math.round(pct * 5)));
+    matchConfidence.set(session.getConfidence());
     setTimeout(() => nextPair(), 500);
   }
+
   function finishMatching() {
-    const freqs = session.testFrequencies;
-    matchFreqResult = freqs[Math.min(session.currentStep, freqs.length - 1)];
-    matchResults.set({ left: matchFreqResult, right: null, confidence: 4 });
-    matchConfidence.set(4);
+    matchFreqResult = session.getResult();
+    matchResults.set({ left: matchFreqResult, right: null, confidence: session.getConfidence() });
+    matchConfidence.set(session.getConfidence());
     notchParams.update(p => { p.left.frequency = matchFreqResult; return p; });
     matchPhase.set('verification');
   }
 
-  // Manual matching
-  let manualFreq = 4000;
-  let manualPlaying = false;
-  let manualOsc = null;
+  // ==================== Manual Matching ====================
   function playTestTone(freq) {
     const ctx = getAudioContext();
     if (manualOsc) { try { manualOsc.stop(); } catch(e) {} manualOsc = null; }
@@ -164,6 +186,14 @@
     if (manualOsc) { try { manualOsc.stop(); } catch(e) {} manualOsc = null; }
     manualPlaying = false;
   }
+  function toggleManualFine() {
+    if (!manualFineMode) {
+      manualFineCenter = manualFreq;
+      manualFineMode = true;
+    } else {
+      manualFineMode = false;
+    }
+  }
   function confirmManual() {
     matchResults.set({ left: manualFreq, right: null, confidence: 3 });
     matchConfidence.set(3);
@@ -172,17 +202,18 @@
     matchPhase.set('verification');
   }
 
-  // Verification
+  // ==================== Verification ====================
   function verifyAccept() { matchPhase.set('complete'); }
   function verifyRetune() { resetMatching(); matchPhase.set('method-select'); }
 
-  // Start therapy session
+  // ==================== Therapy Session ====================
   function startSession() {
     const freq = $notchParams.left.frequency || 4000;
     startTherapy(freq, $notchParams.left.bandwidth, $notchParams.left.depth, selectedCarrier);
     isPlaying.set(true);
     sessionElapsed = 0;
     sessionTimer.set(0);
+    setTimeout(() => startSpectrum(), 100);
     sessionInterval = setInterval(() => {
       sessionElapsed++;
       sessionTimer.set(sessionElapsed);
@@ -190,19 +221,67 @@
     }, 1000);
   }
   function stopSession(byTimer = false) {
+    stopSpectrum();
     stopTherapy();
     isPlaying.set(false);
     if (sessionInterval) { clearInterval(sessionInterval); sessionInterval = null; }
     matchPhase.set('result');
   }
   function emergencyStop() {
+    stopSpectrum();
     stopTherapy();
     isPlaying.set(false);
     if (sessionInterval) { clearInterval(sessionInterval); sessionInterval = null; }
     therapyView.set('match');
   }
 
-  // Post-session rating
+  // ==================== Spectrum Display ====================
+  function startSpectrum() {
+    stopSpectrum();
+    const canvas = document.getElementById('spectrum-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const analyser = getAnalyserNode();
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    const width = canvas.width;
+    const height = canvas.height;
+    function draw() {
+      spectrumAnimFrame = requestAnimationFrame(draw);
+      analyser.getByteFrequencyData(dataArray);
+      ctx.clearRect(0, 0, width, height);
+      const barWidth = width / bufferLength;
+      for (let i = 0; i < bufferLength; i++) {
+        const barHeight = (dataArray[i] / 255) * height;
+        const hue = 28 + Math.round((1 - dataArray[i] / 255) * 20);
+        const light = 35 + Math.round((dataArray[i] / 255) * 35);
+        ctx.fillStyle = 'hsl(' + hue + ', 75%, ' + light + '%)';
+        ctx.fillRect(i * barWidth, height - barHeight, Math.max(barWidth - 0.5, 1), barHeight);
+      }
+      if ($notchParams.left.frequency) {
+        const sr = getAudioContext().sampleRate;
+        const xPos = ($notchParams.left.frequency / (sr / 2)) * width;
+        ctx.strokeStyle = '#D4736E';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(xPos, 0);
+        ctx.lineTo(xPos, height);
+        ctx.stroke();
+        ctx.fillStyle = '#D4736E';
+        ctx.font = '11px Inter, sans-serif';
+        ctx.fillText(Math.round($notchParams.left.frequency) + ' Hz', xPos + 4, 14);
+      }
+    }
+    draw();
+  }
+  function stopSpectrum() {
+    if (spectrumAnimFrame) {
+      cancelAnimationFrame(spectrumAnimFrame);
+      spectrumAnimFrame = null;
+    }
+  }
+
+  // ==================== Post-Session Rating ====================
   function submitRating() {
     const newRecord = {
       date: new Date().toISOString().split("T")[0],
@@ -226,6 +305,7 @@
 
   import { onDestroy } from 'svelte';
   onDestroy(() => {
+    stopSpectrum();
     if (sessionInterval) clearInterval(sessionInterval);
     stopTestTone();
     stopTherapy();
@@ -268,12 +348,12 @@
         <button class="method-card" onclick={() => selectMethod('2afc')}>
           <div class="method-icon">🎯</div>
           <div class="method-name">自适应阶梯法</div>
-          <div class="method-desc">通过逐对比较，精确锁定耳鸣频率。约 5-8 分钟。</div>
+          <div class="method-desc">粗定位→精定位，自动收敛到耳鸣频率。约 5-10 分钟。</div>
         </button>
         <button class="method-card" onclick={() => selectMethod('manual')}>
           <div class="method-icon">🎛️</div>
           <div class="method-name">手动匹配</div>
-          <div class="method-desc">通过滑块调节频率，自己找出最接近的频率。</div>
+          <div class="method-desc">粗调 + 1Hz 微调 + 直接输入。自己找出最接近的频率。</div>
         </button>
       </div>
     </div>
@@ -303,7 +383,10 @@
     <div class="view-panel fade-in">
       <h2 class="title">频率匹配</h2>
       <div class="progress-info">
-        <span class="text-body">第 {$matchStep}/{$matchTotalSteps} 轮</span>
+        <span class="text-body">
+          第 {$matchStep}/{$matchTotalSteps} 轮
+          <span class="phase-badge">{session?.phase === 'coarse' ? '粗定位' : '精定位'}</span>
+        </span>
         <div class="progress-bar-compact">
           <div class="progress-fill-compact" style="width: {Math.min($matchStep / $matchTotalSteps * 100, 100)}%"></div>
         </div>
@@ -323,32 +406,41 @@
         <button class="btn-secondary replay-btn" onclick={() => playSingleTone(currentFreqA)}>🔊 A</button>
         <button class="btn-secondary replay-btn" onclick={() => playSingleTone(currentFreqB)}>🔊 B</button>
       </div>
+      <div class="matching-tools">
+        <button class="chip" class:selected={useNoise} onclick={() => useNoise = !useNoise}>
+          {useNoise ? '🔊 窄带噪音' : '🎵 纯音'}
+        </button>
+      </div>
       <button class="back-step" onclick={goBack}>← 上一步</button>
     </div>
   {:else if $matchPhase === 'manual-match'}
     <!-- Manual matching -->
     <div class="view-panel fade-in">
       <h2 class="title">手动匹配</h2>
-      <p class="desc">拖动滑块试听，找到最接近你的耳鸣频率</p>
+      <p class="desc">{manualFineMode ? '微调模式（1Hz 精度）' : '粗调模式 — 先选大致区域，再点击微调'}</p>
       <div class="manual-controls">
-        <input
-          type="range" min="125" max="12000" step="10"
+        <input type="range"
+          min={manualFineMode ? Math.max(20, manualFineCenter - 100) : 125}
+          max={manualFineMode ? Math.min(16000, manualFineCenter + 100) : 12000}
+          step={manualFineMode ? 1 : 50}
           bind:value={manualFreq}
           class="freq-slider"
           oninput={() => { if (manualPlaying) playTestTone(manualFreq); }}
           onmousedown={() => playTestTone(manualFreq)}
           onmouseup={stopTestTone}
-          ontouchstart={() => playTestTone(manualFreq)}
-          ontouchend={stopTestTone}
         />
         <div class="freq-display">
-          <span class="text-display-md">{manualFreq}</span>
+          <input type="number" min="20" max="16000" bind:value={manualFreq} class="freq-input"
+            onchange={() => { if (manualPlaying) playTestTone(manualFreq); }} />
           <span class="text-body">Hz</span>
         </div>
         <div class="manual-actions">
           <button class="btn-primary" onclick={confirmManual}>确认这个频率</button>
           <button class="btn-secondary" onclick={() => playTestTone(manualFreq)}>试听</button>
           <button class="btn-secondary" onclick={stopTestTone}>停止</button>
+          <button class="btn-utility" onclick={toggleManualFine}>
+            {manualFineMode ? '← 返回粗调' : '微调 🔍'}
+          </button>
         </div>
       </div>
       <button class="back-step" onclick={goBack}>← 上一步</button>
@@ -360,6 +452,7 @@
       <p class="desc">系统锁定频率为 <strong>{Math.round($notchParams.left.frequency)} Hz</strong></p>
       <div class="verification-actions">
         <button class="btn-primary" onclick={verifyAccept}>确认，开始治疗</button>
+        <button class="btn-secondary" onclick={() => playTestTone($notchParams.left.frequency)}>🔊 试听频率</button>
         <button class="btn-secondary" onclick={verifyRetune}>重新匹配</button>
       </div>
       <button class="back-step" onclick={goBack}>← 上一步</button>
@@ -374,13 +467,16 @@
           <span class="text-display-md">{Math.round($notchParams.left.frequency)} Hz</span>
         </div>
         <div class="report-item">
-          <span class="text-caption">匹配可信度</span>
+          <span class="text-caption">匹配一致性</span>
           <div class="stars">{'★'.repeat($matchConfidence)}{'☆'.repeat(5 - $matchConfidence)}</div>
+          <span class="text-fine confidence-label">{confidenceLabels[$matchConfidence] || ''}</span>
         </div>
       </div>
       <div class="session-controls">
         <div class="control-row">
-          <label class="text-caption-strong">载音类型</label>
+          <label class="text-caption-strong">
+            载音类型
+          </label>
           <div class="chip-group">
             {#each ['white', 'pink', 'ambient'] as c}
               <button class="chip" class:selected={selectedCarrier === c} onclick={() => selectedCarrier = c}>
@@ -390,20 +486,26 @@
           </div>
         </div>
         <div class="control-row">
-          <label class="text-caption-strong">带宽</label>
+          <label class="text-caption-strong">
+            带宽 <span class="tip" title="窄=精确切除目标音频段；中=平衡覆盖（推荐）；宽=切除较宽范围，更柔和">ⓘ</span>
+          </label>
           <div class="chip-group">
             {#each bandwidths as bw}
-              <button class="chip" class:selected={$notchParams.left.bandwidth === bw.id} onclick={() => notchParams.update(p => { p.left.bandwidth = bw.id; return p; })}>
+              <button class="chip" class:selected={$notchParams.left.bandwidth === bw.id}
+                onclick={() => notchParams.update(p => { p.left.bandwidth = bw.id; return p; })}>
                 {bw.label}
               </button>
             {/each}
           </div>
         </div>
         <div class="control-row">
-          <label class="text-caption-strong">深度</label>
+          <label class="text-caption-strong">
+            深度 <span class="tip" title="切除强度：-3dB 轻微；-6dB 中度；-12dB 标准（推荐）；-20dB 最强">ⓘ</span>
+          </label>
           <div class="chip-group">
             {#each depths as d}
-              <button class="chip" class:selected={$notchParams.left.depth === d.id} onclick={() => notchParams.update(p => { p.left.depth = d.id; return p; })}>
+              <button class="chip" class:selected={$notchParams.left.depth === d.id}
+                onclick={() => notchParams.update(p => { p.left.depth = d.id; return p; })}>
                 {d.label}
               </button>
             {/each}
@@ -475,6 +577,13 @@
       <span class="text-tagline">治疗中</span>
       <span class="text-lead">{Math.floor(sessionElapsed / 60)}:{String(sessionElapsed % 60).padStart(2, '0')}</span>
     </div>
+    <div class="spectrum-container">
+      <div class="spectrum-header">
+        <span class="spectrum-label">实时频谱</span>
+        <span class="spectrum-hint">红线 = 切迹频率</span>
+      </div>
+      <canvas id="spectrum-canvas" width="480" height="160"></canvas>
+    </div>
   </div>
 {/if}
 
@@ -536,9 +645,7 @@
     transition: border-color 0.2s, transform 0.1s;
     text-align: center;
   }
-  .method-card:hover {
-    border-color: var(--primary);
-  }
+  .method-card:hover { border-color: var(--primary); }
   .method-icon { font-size: 36px; }
   .method-name { font-size: 17px; font-weight: 600; }
   .method-desc { font-size: 14px; font-weight: 400; color: var(--ink-muted-48); line-height: 1.43; }
@@ -556,6 +663,16 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+  }
+  .phase-badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+    background: rgba(196, 129, 61, 0.1);
+    border-radius: var(--radius-pill);
+    padding: 2px 10px;
+    margin-left: 8px;
   }
   .progress-bar-compact {
     height: 4px;
@@ -594,6 +711,10 @@
   }
   .afc-label { font-size: 14px; font-weight: 600; color: var(--ink-muted-48); letter-spacing: -0.224px; }
   .afc-freq { font-size: 24px; font-weight: 600; color: var(--ink); }
+  .matching-tools {
+    display: flex;
+    gap: var(--space-xs);
+  }
   .manual-controls {
     width: 100%;
     display: flex;
@@ -624,10 +745,25 @@
   }
   .freq-display {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--space-xs);
   }
-  .manual-actions { display: flex; gap: var(--space-sm); }
+  .freq-input {
+    width: 120px;
+    padding: 8px 12px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    text-align: center;
+    font-size: 24px;
+    font-weight: 600;
+    background: var(--canvas);
+    font-family: inherit;
+  }
+  .freq-input:focus {
+    outline: 2px solid var(--primary-focus);
+    outline-offset: -1px;
+  }
+  .manual-actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; justify-content: center; }
   .verification-actions {
     display: flex;
     gap: var(--space-sm);
@@ -637,6 +773,7 @@
   .match-report {
     display: flex;
     gap: var(--space-xl);
+    align-items: flex-start;
   }
   .report-item {
     display: flex;
@@ -648,6 +785,25 @@
     font-size: 24px;
     color: var(--primary);
     letter-spacing: 2px;
+  }
+  .confidence-label {
+    color: var(--ink-muted-48);
+    max-width: 160px;
+  }
+  .tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 11px;
+    border-radius: 50%;
+    border: 1px solid var(--ink-muted-48);
+    color: var(--ink-muted-48);
+    cursor: help;
+    margin-left: 4px;
+    vertical-align: middle;
+    line-height: 1;
   }
   .session-controls {
     width: 100%;
@@ -692,9 +848,7 @@
     font-size: 14px;
     color: var(--ink);
   }
-  .feeling-btn:hover, .feeling-btn.selected {
-    border-color: var(--primary);
-  }
+  .feeling-btn:hover, .feeling-btn.selected { border-color: var(--primary); }
   .feeling-icon { font-size: 32px; }
   .severity-slider {
     width: 100%;
@@ -750,9 +904,7 @@
     background: var(--hairline);
     transition: background 0.2s;
   }
-  .dot.active {
-    background: var(--primary);
-  }
+  .dot.active { background: var(--primary); }
   .back-step {
     font-size: 14px;
     font-weight: 400;
@@ -763,9 +915,7 @@
     padding: 4px 0;
     margin-top: 4px;
   }
-  .back-step:hover {
-    color: var(--primary);
-  }
+  .back-step:hover { color: var(--primary); }
   .privacy-note {
     color: var(--ink-muted-48);
     text-align: center;
@@ -795,7 +945,37 @@
     text-align: center;
     color: #fff;
   }
-  .session-info .text-tagline {
-    color: var(--primary-on-dark);
+  .session-info .text-tagline { color: var(--primary-on-dark); }
+  .spectrum-container {
+    width: 100%;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+  }
+  .spectrum-header {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 4px;
+  }
+  .spectrum-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.7);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .spectrum-hint {
+    font-size: 11px;
+    color: #D4736E;
+  }
+  #spectrum-canvas {
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+    background: rgba(0,0,0,0.4);
   }
 </style>
