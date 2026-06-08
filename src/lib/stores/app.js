@@ -22,3 +22,5 @@ export const records = writable([]);
 
 // Alert message
 export const alert = writable(null);
+// Locale
+export const locale = writable('en');

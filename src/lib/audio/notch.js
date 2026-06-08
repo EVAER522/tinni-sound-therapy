@@ -2,54 +2,150 @@
 
 import { getAudioContext, createWhiteNoise, createPinkNoise, createNotchFilter, getMasterGain } from './engine.js';
 
-let currentNodes = [];
+let currentNodes = {};
 let isRunning = false;
+
+// --- uploaded audio ---
+let uploadedAudioBuffer = null;
+let uploadedAudioName = "";
+
+// --- mic ---
+let micStream = null;
 
 export function isTherapyRunning() {
   return isRunning;
 }
 
-export function startTherapy(frequency, bandwidth = "medium", depth = -12, carrier = "white") {
+export function loadUploadedAudio(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const ctx = getAudioContext();
+      try {
+        uploadedAudioBuffer = await ctx.decodeAudioData(e.target.result);
+        uploadedAudioName = file.name;
+        resolve(uploadedAudioBuffer);
+      } catch (err) {
+        uploadedAudioBuffer = null;
+        uploadedAudioName = "";
+        reject(err);
+      }
+    };
+    reader.onerror = () => { uploadedAudioBuffer = null; reject(); };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+export function clearUploadedAudio() {
+  uploadedAudioBuffer = null;
+  uploadedAudioName = "";
+}
+
+export function getUploadedAudioName() {
+  return uploadedAudioName;
+}
+
+export async function startMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return true;
+  } catch (e) {
+    console.warn("Mic access denied:", e);
+    return false;
+  }
+}
+
+export function stopMic() {
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+}
+
+export function isMicActive() {
+  return !!micStream;
+}
+
+/**
+ * Audio graph: (carrier noise + uploaded audio + mic) -> mixerGain -> NotchFilter -> DepthGain -> Master
+ */
+export function startTherapy(frequency, bandwidth = "medium", depth = -12, carrier = "white", options = {}) {
+  const { useVoice = false, useUpload = false } = options;
   const ctx = getAudioContext();
   stopTherapy();
-
   isRunning = true;
 
-  const duration = 30;
-  const buffer = carrier === "pink" ? createPinkNoise(duration) : createWhiteNoise(duration);
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
+  const mixerGain = ctx.createGain();
+  mixerGain.gain.value = 0.7;
 
   const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
-  const Q = Qmap[bandwidth] || 2.0;
-  const notchFilter = createNotchFilter(frequency, Q);
+  const notchFilter = createNotchFilter(frequency, Qmap[bandwidth] || 2.0);
 
   const depthGain = ctx.createGain();
   const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
   depthGain.gain.value = depthMap[String(depth)] || 0.25;
 
-  source.connect(notchFilter);
+  mixerGain.connect(notchFilter);
   notchFilter.connect(depthGain);
   depthGain.connect(getMasterGain());
-  source.start();
 
-  currentNodes = [source, notchFilter, depthGain];
-  return { source, notchFilter, depthGain };
+  const sourceNodes = [];
+
+  // 1. Carrier noise
+  const noiseBuf = carrier === "pink" ? createPinkNoise(30) : createWhiteNoise(30);
+  const noiseSrc = ctx.createBufferSource();
+  noiseSrc.buffer = noiseBuf;
+  noiseSrc.loop = true;
+  noiseSrc.connect(mixerGain);
+  noiseSrc.start();
+  sourceNodes.push(noiseSrc);
+
+  // 2. Uploaded audio
+  if (useUpload && uploadedAudioBuffer) {
+    const uploadSrc = ctx.createBufferSource();
+    uploadSrc.buffer = uploadedAudioBuffer;
+    uploadSrc.loop = true;
+    const uploadGain = ctx.createGain();
+    uploadGain.gain.value = 0.45;
+    uploadSrc.connect(uploadGain);
+    uploadGain.connect(mixerGain);
+    uploadSrc.start();
+    sourceNodes.push(uploadSrc, uploadGain);
+  }
+
+  // 3. Mic
+  if (useVoice && micStream) {
+    const micSrc = ctx.createMediaStreamSource(micStream);
+    const micGain = ctx.createGain();
+    micGain.gain.value = 0.35;
+    micSrc.connect(micGain);
+    micGain.connect(mixerGain);
+    sourceNodes.push(micSrc, micGain);
+  }
+
+  currentNodes = { mixerGain, notchFilter, depthGain, sourceNodes };
+  return currentNodes;
 }
 
 export function stopTherapy() {
   isRunning = false;
-  currentNodes.forEach(node => {
-    try { node.disconnect(); } catch(e) {}
+  if (currentNodes.sourceNodes) {
+    currentNodes.sourceNodes.forEach((n) => {
+      try { if (n.stop) n.stop(); } catch (e) {}
+      try { n.disconnect(); } catch (e) {}
+    });
+  }
+  ["mixerGain", "notchFilter", "depthGain"].forEach((k) => {
+    const n = currentNodes[k];
+    if (n) try { n.disconnect(); } catch (e) {}
   });
-  currentNodes = [];
+  currentNodes = {};
 }
 
 export function updateTherapyParams(frequency, bandwidth = "medium", depth = -12) {
   const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
-  const notchFilter = currentNodes[1];
-  const depthGain = currentNodes[2];
+  const notchFilter = currentNodes.notchFilter;
+  const depthGain = currentNodes.depthGain;
   if (notchFilter) {
     notchFilter.frequency.value = frequency;
     notchFilter.Q.value = Qmap[bandwidth] || 2.0;
@@ -61,10 +157,8 @@ export function updateTherapyParams(frequency, bandwidth = "medium", depth = -12
 }
 
 // ============================================================
-// 2AFC adaptive staircase matching (improved)
-// Phase 1: Binary search across octave bands for coarse localization
-// Phase 2: Adaptive staircase with diminishing step size for fine tuning
-// Phase 3: Verification — play candidate frequency for user confirmation
+// 2AFC adaptive staircase matching
+// Phase 1-3: coarse -> fine -> verification
 // ============================================================
 
 export function createMatchingSession() {
@@ -82,9 +176,9 @@ export function createMatchingSession() {
   let activeNodes = [];
 
   function stopActiveNodes() {
-    activeNodes.forEach(n => {
-      try { if (n.stop) n.stop(); } catch(e) {}
-      try { if (n.disconnect) n.disconnect(); } catch(e) {}
+    activeNodes.forEach((n) => {
+      try { if (n.stop) n.stop(); } catch (e) {}
+      try { if (n.disconnect) n.disconnect(); } catch (e) {}
     });
     activeNodes = [];
   }
