@@ -1,18 +1,18 @@
 // Sound data for sleep soundscape — real audio files from 音效 folder
 
 export const soundLibrary = [
-  { id: 'rain', name: '雨声', icon: '🌧️', category: 'nature', file: '/audio/雨声.mp3' },
-  { id: 'thunder', name: '雷雨', icon: '⛈️', category: 'nature', file: '/audio/雷雨.mp3' },
-  { id: 'waves', name: '海浪', icon: '🌊', category: 'nature', file: '/audio/海浪.mp3' },
-  { id: 'stream', name: '小溪', icon: '💧', category: 'nature', file: '/audio/小溪.mp3' },
-  { id: 'fire', name: '篝火', icon: '🔥', category: 'nature', file: '/audio/篝火.mp3' },
-  { id: 'wind', name: '风声', icon: '🍃', category: 'nature', file: '/audio/风声.mp3' },
-  { id: 'birds', name: '鸟鸣', icon: '🐦', category: 'nature', file: '/audio/鸟鸣.mp3' },
-  { id: 'insects', name: '虫鸣', icon: '🦗', category: 'nature', file: '/audio/虫鸣.mp3' },
-  { id: 'cat-purr', name: '猫咪呼噜', icon: '🐱', category: 'animals', file: '/audio/猫咪呼噜.mp3' },
-  { id: 'fan', name: '风扇', icon: '🌀', category: 'ambient', file: '/audio/风扇.mp3' },
-  { id: 'pinknoise', name: '粉红噪声', icon: '🌸', category: 'noise', file: '/audio/粉红噪声.mp3' },
-  { id: 'brownnoise', name: '布朗噪声', icon: '🟤', category: 'noise', file: '/audio/布朗噪声.mp3' },
+  { id: 'rain', name: '雨声', icon: '🌧️', category: 'nature', file: 'audio/雨声.mp3' },
+  { id: 'thunder', name: '雷雨', icon: '⛈️', category: 'nature', file: 'audio/雷雨.mp3' },
+  { id: 'waves', name: '海浪', icon: '🌊', category: 'nature', file: 'audio/海浪.mp3' },
+  { id: 'stream', name: '小溪', icon: '💧', category: 'nature', file: 'audio/小溪.mp3' },
+  { id: 'fire', name: '篝火', icon: '🔥', category: 'nature', file: 'audio/篝火.mp3' },
+  { id: 'wind', name: '风声', icon: '🍃', category: 'nature', file: 'audio/风声.mp3' },
+  { id: 'birds', name: '鸟鸣', icon: '🐦', category: 'nature', file: 'audio/鸟鸣.mp3' },
+  { id: 'insects', name: '虫鸣', icon: '🦗', category: 'nature', file: 'audio/虫鸣.mp3' },
+  { id: 'cat-purr', name: '猫咪呼噜', icon: '🐱', category: 'animals', file: 'audio/猫咪呼噜.mp3' },
+  { id: 'fan', name: '风扇', icon: '🌀', category: 'ambient', file: 'audio/风扇.mp3' },
+  { id: 'pinknoise', name: '粉红噪声', icon: '🌸', category: 'noise', file: 'audio/粉红噪声.mp3' },
+  { id: 'brownnoise', name: '布朗噪声', icon: '🟤', category: 'noise', file: 'audio/布朗噪声.mp3' },
 ];
 
 export const defaultPresets = [
