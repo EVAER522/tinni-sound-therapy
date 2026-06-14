@@ -1,4 +1,4 @@
-// Audio engine - core audio context and utilities for Web Audio API
+﻿// Audio engine - core audio context and utilities for Web Audio API
 
 let audioCtx = null;
 let masterGain = null;
@@ -122,3 +122,18 @@ export function getAnalyserNode() {
   return analyserNode;
 }
 
+export function suspendAudio() {
+  if (audioCtx && audioCtx.state === 'running') {
+    audioCtx.suspend();
+  }
+}
+
+export function resumeAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+export function isAudioSuspended() {
+  return audioCtx && audioCtx.state === 'suspended';
+}

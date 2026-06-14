@@ -1,3 +1,77 @@
-<script>import{isPlaying,volume,isMuted}from"../stores/app.js";import{remainingTime,audioProgress}from"../stores/audio.js";import{setMasterVolume}from"../audio/engine.js";let lv=0.7;function tp(){isPlaying.update(v=>!v);}function hv(e){lv=parseFloat(e.target.value);volume.set(lv);setMasterVolume(lv);}function tm(){isMuted.update(v=>!v);if($isMuted)setMasterVolume(0);else setMasterVolume($volume);}function fm(m){const mn=Math.floor(m);const s=Math.round((m-mn)*60);return String(mn).padStart(2,"0")+":"+String(s).padStart(2,"0");}</script>
-{#if $isPlaying}<div class="mp-frosted"><div class="mp-left"><button class="mp-btn" onclick={tp} aria-label="Play/Pause">{#if $isPlaying}<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>{:else}<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>{/if}</button></div><div class="mp-center"><div class="mp-progress"><div class="mp-fill" style="width:{Math.min($audioProgress*100,100)}%"></div></div></div><div class="mp-right"><button class="mp-btn" onclick={tm} aria-label="Mute">{#if $isMuted||lv===0}<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/></svg>{:else if $volume<0.5}<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><path d="M15.5 8.5a4 4 0 010 7"/></svg>{:else}<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><path d="M15.5 8.5a4 4 0 010 7"/><path d="M19 5a8 8 0 010 14"/></svg>{/if}</button><input type="range" min="0" max="1" step="0.01" value={lv} oninput={hv} class="mp-slider" aria-label="Volume"/><span class="mp-time">{fm($remainingTime)}</span></div></div>{/if}
-<style>.mp-frosted{height:64px;background:rgba(245,245,247,.9);backdrop-filter:saturate(180%)blur(20px);-webkit-backdrop-filter:saturate(180%)blur(20px);border-top:1px solid var(--hairline);display:flex;align-items:center;padding:0 var(--space-lg);gap:var(--space-md);flex-shrink:0;z-index:10;}.mp-btn{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--surface-pearl);border:1px solid var(--divider-soft);color:var(--ink);}.mp-btn:hover{background:var(--canvas-parchment);}.mp-center{flex:1;}.mp-progress{height:4px;background:var(--hairline);border-radius:2px;overflow:hidden;}.mp-fill{height:100%;background:var(--primary);border-radius:2px;transition:width .3s;}.mp-right{display:flex;align-items:center;gap:var(--space-xs);}.mp-slider{width:80px;height:4px;-webkit-appearance:none;appearance:none;background:var(--hairline);border-radius:2px;outline:none;}.mp-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--canvas);border:2px solid var(--primary);cursor:pointer;}.mp-time{font-size:14px;font-weight:400;color:var(--ink-muted-48);min-width:50px;text-align:right;letter-spacing:-.224px;}</style>
+<script>
+  import { isPlaying, currentMode, volume, sheetContent, sessionActive } from '../stores/app.js';
+  import { audioProgress, remainingTime } from '../stores/audio.js';
+  import { setMasterVolume } from '../audio/engine.js';
+  import { getBrainwaveName } from '../audio/brainwave.js';
+  import { brainwaveMode } from '../stores/audio.js';
+  import { t } from '../stores/locale.js';
+
+  $: trackName = $currentMode === 'therapy' ? 'Notch Therapy' : $currentMode === 'brainwave' ? getBrainwaveName($brainwaveMode) : 'Sleep Soundscape';
+  $: timeStr = formatTime($remainingTime);
+  $: progressPct = Math.min($audioProgress * 100, 100);
+
+  function formatTime(s) {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+  }
+
+  function togglePlay(e) {
+    e.stopPropagation();
+    isPlaying.update(v => !v);
+  }
+  function handleExpand() {
+    // Open Now Playing sheet with a simple info panel
+    import('../views/NowPlaying.svelte').then(mod => {
+      sheetContent.set({ component: mod.default, props: {} });
+    });
+  }
+
+  // Listen for expand event from DynamicIsland
+  function onExpand(e) { handleExpand(); }
+  import { onMount, onDestroy } from 'svelte';
+  onMount(() => { window.addEventListener('expand-player', onExpand); });
+  onDestroy(() => { window.removeEventListener('expand-player', onExpand); });
+</script>
+
+{#if $sessionActive}
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div class="mini-player" onclick={handleExpand} role="button" tabindex="0" onkeydown={(e)=>{if(e.key==="Enter"||e.key===" ")handleExpand();}}>
+    <div class="mp-thumb">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="2" width="4" height="20" rx="1" opacity="0.4"><animate attributeName="height" values="20;12;20" dur="1.2s" repeatCount="indefinite"/><animate attributeName="y" values="2;7;2" dur="1.2s" repeatCount="indefinite"/></rect><rect x="14" y="4" width="4" height="16" rx="1" opacity="0.8"><animate attributeName="height" values="16;8;16" dur="0.9s" repeatCount="indefinite"/><animate attributeName="y" values="4;9;4" dur="0.9s" repeatCount="indefinite"/></rect></svg>
+    </div>
+    <div class="mp-info">
+      <div class="mp-title">{trackName}</div>
+      <div class="mp-progress-track">
+        <div class="mp-progress-fill" style="width: {progressPct}%"></div>
+      </div>
+    </div>
+    <button class="mp-play-btn" aria-label="Play/Pause" onclick={togglePlay}>
+      {#if $isPlaying}
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="4" width="4" height="16" rx="1"/>
+          <rect x="14" y="4" width="4" height="16" rx="1"/>
+        </svg>
+      {:else}
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+      {/if}
+    </button>
+  </div>
+{/if}
+
+<style>
+  .mini-player { position: fixed; bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 8px); left: 12px; right: 12px; height: var(--miniplayer-height); display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--glass-bg-medium); backdrop-filter: blur(20px) saturate(1.8); -webkit-backdrop-filter: blur(20px) saturate(1.8); border: 1px solid var(--glass-border); border-radius: 14px; box-shadow: var(--glass-shadow); z-index: 30; cursor: pointer; animation: mp-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); will-change: transform; transform: translateZ(0); }
+  .mini-player:hover { background: var(--glass-bg-heavy); }
+  @keyframes mp-in { from { transform: translateY(80px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .mp-thumb { width: 40px; height: 40px; border-radius: 10px; background: var(--glass-bg-light); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: rgba(108,92,231,0.8); }
+  .mp-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .mp-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+  .mp-progress-track { height: 3px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+  .mp-progress-fill { height: 100%; background: var(--accent-blue-purple); border-radius: 2px; transition: width 0.3s; }
+  .mp-play-btn { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--glass-bg-light); border: 1px solid var(--glass-border); color: var(--text-primary); flex-shrink: 0; cursor: pointer; transition: background 0.15s, transform 0.15s var(--spring-snappy); }
+  .mp-play-btn:hover { background: var(--glass-bg-medium); }
+  .mp-play-btn:active { transform: scale(0.93); }
+</style>
+

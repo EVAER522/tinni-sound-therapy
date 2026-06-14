@@ -1,43 +1,74 @@
-# Svelte + Vite
+# Tinni App — 耳鸣声音疗法 SPA
 
-This template should help get you started developing with Svelte in Vite.
+基于 **Svelte + Vite** 构建的浏览器端声音疗法应用，专为耳鸣（Tinnitus）缓解设计。无需后端，纯静态单页应用。
 
-## Recommended IDE Setup
+## 核心功能
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+- **Notch Therapy（陷波疗法）** — 通过音频陷波滤波进行声学刺激，针对耳鸣频率定制，可叠加粉红噪音/白噪音背景
+- **Brainwave（脑波）** — 双耳节拍生成器，支持多种目标脑波状态（Delta/Theta/Alpha/Beta/Gamma）
+- **Sleep Soundscape（睡眠声景）** — 环境混合音，组合自然声音 + 脑波节拍，助眠场景
+- **播放记录** — 本地存储的疗法使用历史与统计
+- **设置** — 主题偏好、i18n 中/英文切换等
 
-## Need an official Svelte framework?
+## 技术栈
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+| 层 | 技术 |
+|---|---|
+| 框架 | Svelte 3 |
+| 构建 | Vite |
+| 音频引擎 | Web Audio API（AudioContext + OscillatorNode + BiquadFilterNode） |
+| 状态管理 | svelte/store 响应式 stores |
+| 国际化 | 自建 i18n 模块，支持 zh-CN / en |
+| 样式 | 纯 CSS，无 UI 框架，iOS 风格 UI |
+| 部署 | 静态文件，任意 HTTP 服务器即可托管 |
 
-## Technical considerations
+## 项目结构
 
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `checkJs` in the JS template?**
-
-It is likely that most cases of changing variable types in runtime are likely to be accidental, rather than deliberate. This provides advanced typechecking out of the box. Should you like to take advantage of the dynamically-typed nature of JavaScript, it is trivial to change the configuration.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/sveltejs/svelte-hmr/tree/master/packages/svelte-hmr#preservation-of-local-state).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```js
-// store.js
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
 ```
+src/
+├── App.svelte          # 应用入口
+├── main.js             # Vite 入口
+├── app.css             # 全局样式
+├── assets/             # 静态资源（hero.png）
+├── lib/
+│   ├── audio/          # Web Audio 引擎实现
+│   │   ├── engine.js   # 音频引擎基类
+│   │   ├── notch.js    # 陷波疗法引擎
+│   │   └── brainwave.js# 脑波引擎
+│   ├── stores/         # Svelte stores
+│   │   ├── app.js      # 全局应用状态
+│   │   ├── audio.js    # 音频播放状态
+│   │   ├── therapy.js  # 疗法相关状态
+│   │   └── locale.js   # 国际化状态
+│   ├── components/     # UI 组件
+│   │   ├── GlobalNav.svelte
+│   │   ├── MiniPlayer.svelte
+│   │   ├── BottomSheet.svelte
+│   │   ├── BottomTab.svelte
+│   │   ├── DynamicIsland.svelte
+│   │   └── TopRightPanel.svelte
+│   ├── views/          # 页面视图
+│   │   ├── NotchTherapy.svelte
+│   │   ├── Brainwave.svelte
+│   │   ├── SleepSoundscape.svelte
+│   │   ├── NowPlaying.svelte
+│   │   ├── Records.svelte
+│   │   └── Settings.svelte
+│   └── data/           # 数据定义
+│       └── sounds.js
+├── public/             # 静态文件（favicon、音频片段）
+└── static/             # 更多静态资源
+```
+
+## 开发
+
+```bash
+npm install
+npm run dev     # 启动开发服务器 (默认 localhost:5173)
+npm run build   # 构建到 dist/
+npm run preview # 预览构建产物
+```
+
+## 鸣谢
+
+本应用为个人耳鸣管理项目，不构成医疗建议。如有听力健康问题请咨询专业医师。

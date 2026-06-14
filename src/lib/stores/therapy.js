@@ -1,4 +1,5 @@
 import { writable, derived } from "svelte/store";
+import { persist } from "./app.js";
 
 // --- Frequency matching state ---
 export const matchMethod = writable(""); // "2afc" | "manual"
@@ -15,11 +16,12 @@ export const useUpload = writable(false);
 export const uploadedFileName = writable("");
 
 // --- Notch filter parameters ---
-export const notchParams = writable({
+export const notchParams = persist(writable({
   left: { frequency: null, bandwidth: "medium", depth: -12 },
   right: { frequency: null, bandwidth: "medium", depth: -12 },
   independent: false,
-});
+}), 'tinni_notch_params');
+
 
 // --- Session state ---
 export const sessionTimer = writable(0);
