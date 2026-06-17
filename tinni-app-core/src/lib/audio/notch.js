@@ -5,6 +5,19 @@ import { getAudioContext, createWhiteNoise, createPinkNoise, createNotchFilter, 
 let currentNodes = {};
 let isRunning = false;
 
+const bufferCache = new Map();
+
+async function fetchAudioBuffer(url, ctx) {
+  if (bufferCache.has(url)) {
+    return bufferCache.get(url);
+  }
+  const response = await fetch(url);
+  const arrayBuffer = await response.arrayBuffer();
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+  bufferCache.set(url, audioBuffer);
+  return audioBuffer;
+}
+
 // --- uploaded audio ---
 let uploadedAudioBuffer = null;
 let uploadedAudioName = "";
@@ -77,6 +90,8 @@ export function startTherapy(frequency, bandwidth = "medium", depth = -12, carri
   const ctx = getAudioContext();
   stopTherapy();
   isRunning = true;
+  console.log("startTherapy: freq =", frequency, "bw =", bandwidth, "depth =", depth, "carrier =", carrier, "options =", options);
+  console.log("startTherapy: uploadedAudioBuffer =", uploadedAudioBuffer);
 
   const mixerGain = ctx.createGain();
   // Smooth fade-in: start at 0, ramp to 0.7 over 200ms
@@ -105,13 +120,40 @@ export function startTherapy(frequency, bandwidth = "medium", depth = -12, carri
   const sourceNodes = [];
 
   // 1. Carrier noise
-  const noiseBuf = carrier === "pink" ? createPinkNoise(30) : createWhiteNoise(30);
-  const noiseSrc = ctx.createBufferSource();
-  noiseSrc.buffer = noiseBuf;
-  noiseSrc.loop = true;
-  noiseSrc.connect(mixerGain);
-  noiseSrc.start();
-  sourceNodes.push(noiseSrc);
+  const fileMap = {
+    brown: "audio/布朗噪声.mp3",
+    rain: "audio/雨声.mp3",
+    waves: "audio/海浪.mp3",
+    wind: "audio/风声.mp3",
+    stream: "audio/小溪.mp3"
+  };
+
+  if (carrier === "none") {
+    console.log("startTherapy: No carrier noise played.");
+  } else if (fileMap[carrier]) {
+    const url = fileMap[carrier];
+    const sourceNode = ctx.createBufferSource();
+    sourceNode.loop = true;
+    sourceNodes.push(sourceNode);
+    
+    fetchAudioBuffer(url, ctx).then((audioBuffer) => {
+      if (isRunning && currentNodes.sourceNodes && currentNodes.sourceNodes.includes(sourceNode)) {
+        sourceNode.buffer = audioBuffer;
+        sourceNode.connect(mixerGain);
+        sourceNode.start(0);
+      }
+    }).catch(err => {
+      console.error("Failed to load carrier file:", err);
+    });
+  } else {
+    const noiseBuf = carrier === "pink" ? createPinkNoise(30) : createWhiteNoise(30);
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = noiseBuf;
+    noiseSrc.loop = true;
+    noiseSrc.connect(mixerGain);
+    noiseSrc.start();
+    sourceNodes.push(noiseSrc);
+  }
 
   // 2. Uploaded audio
   if (useUpload && uploadedAudioBuffer) {

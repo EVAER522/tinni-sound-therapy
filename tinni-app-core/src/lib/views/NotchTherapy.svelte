@@ -186,6 +186,46 @@
     }
   }
 
+  function getCarrierIcon(c) {
+    const map = {
+      white: '🌀',
+      pink: '🌸',
+      brown: '🟤',
+      rain: '🌧️',
+      waves: '🌊',
+      wind: '🍃',
+      stream: '💧'
+    };
+    return map[c] || '🎵';
+  }
+
+  function getCarrierName(c, translations) {
+    const map = {
+      white: translations.notch_white_noise,
+      pink: translations.notch_pink_noise,
+      brown: translations.notch_brown_noise,
+      rain: translations.notch_rain,
+      waves: translations.notch_waves,
+      wind: translations.notch_wind,
+      stream: translations.notch_stream
+    };
+    return map[c] || c;
+  }
+
+  function getConfidenceLabel(c, lang) {
+    if (lang === 'zh') {
+      if (c >= 5) return '极高';
+      if (c === 4) return '高';
+      if (c === 3) return '中等';
+      return '偏低';
+    } else {
+      if (c >= 5) return 'Excellent';
+      if (c === 4) return 'High';
+      if (c === 3) return 'Good';
+      return 'Fair';
+    }
+  }
+
   $: paused = $sessionActive && !$isPlaying;
   function startTimer(){
     if(sessionInterval)clearInterval(sessionInterval);
@@ -481,90 +521,188 @@
         </button>
       </div>
     </div>
-    
     <button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button>
   </div>
 {:else if $matchPhase==="verification"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_verify_title}</h2><p class="desc">{$t.notch_verify_desc} <strong>{Math.round($notchParams.left.frequency)} Hz</strong></p><div class="verification-actions"><button class="glass-btn-primary" onclick={verifyAccept}>{$t.notch_confirm_start}</button><button class="glass-btn-secondary" onclick={()=>playTestTone($notchParams.left.frequency)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={verifyRetune}>{$t.notch_rematch}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
   {:else if $matchPhase==="complete"}
   <div class="view-panel fade-in">
     <h2 class="title">{$t.notch_complete_title}</h2>
-    <div class="match-report">
-      <div class="report-item">
-        <span class="text-caption">{$t.notch_frequency}</span>
-        <span class="text-display-md">{Math.round($notchParams.left.frequency)} Hz</span>
+    
+    <div class="match-dashboard glass">
+      <div class="dash-item">
+        <span class="dash-label">{$t.notch_frequency}</span>
+        <span class="dash-value">{Math.round($notchParams.left.frequency)} <span class="dash-unit">Hz</span></span>
       </div>
-      <div class="report-item">
-        <span class="text-caption">{$t.notch_confidence}</span>
-        <div class="confidence-dots">{#each Array(5) as _,i}<span class="conf-dot" class:filled={i<$matchConfidence}></span>{/each}</div>
+      <div class="dash-divider"></div>
+      <div class="dash-item">
+        <span class="dash-label">{$t.notch_confidence}</span>
+        <div class="dash-confidence">
+          <div class="confidence-dots">{#each Array(5) as _,i}<span class="conf-dot" class:filled={i<$matchConfidence}></span>{/each}</div>
+          <span class="confidence-text">{getConfidenceLabel($matchConfidence, $locale)}</span>
+        </div>
       </div>
     </div>
+    
     <div class="session-controls">
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_carrier}</label>
-        <div class="chip-group" role="radiogroup">
-          {#each ["white","pink","ambient"] as c}
-            <button class="glass-chip" class:selected={selectedCarrier===c} onclick={()=>selectedCarrier=c}>{c==="white"?$t.notch_white_noise:c==="pink"?$t.notch_pink_noise:$t.notch_ambient}</button>
-          {/each}
+      <!-- Card 1: Sound Sources -->
+      <div class="settings-card glass">
+        <h3 class="card-section-title">{$t.notch_audio_sources}</h3>
+        
+        <!-- Carrier Selection -->
+        <div class="carrier-section">
+          <button 
+            type="button"
+            class="none-carrier-btn" 
+            class:active={selectedCarrier === 'none'} 
+            onclick={() => selectedCarrier = 'none'}
+          >
+            <span class="none-icon">🔇</span>
+            <div class="none-details">
+              <span class="none-title">{$t.notch_no_carrier_title}</span>
+              <span class="none-subtitle">{$t.notch_no_carrier_desc}</span>
+            </div>
+          </button>
+          
+          <div class="carrier-divider">
+            <span>{$t.notch_or_choose_noise}</span>
+          </div>
+          
+          <div class="noises-grid">
+            {#each ["white","pink","brown","rain","waves","wind","stream"] as c}
+              <button 
+                type="button"
+                class="noise-card" 
+                class:selected={selectedCarrier === c} 
+                onclick={() => selectedCarrier = c}
+              >
+                <span class="noise-icon">{getCarrierIcon(c)}</span>
+                <span class="noise-name">{getCarrierName(c, $t)}</span>
+              </button>
+            {/each}
+          </div>
         </div>
-      </div>
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_upload_audio}</label>
-        <div class="chip-group">
-          <input type="file" accept="audio/*" bind:this={fileInputEl} onchange={handleUpload} style="display:none" />
-          <button class="glass-chip" onclick={()=>fileInputEl?.click()}>{$t.notch_select_file}</button>
-          {#if $useUpload}<button class="glass-chip" onclick={clearUpload}>{$t.notch_clear}</button>{/if}
-        </div>
-      </div>
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_mic}</label>
-        <div class="chip-group" role="radiogroup">
-          <button class="glass-chip" class:selected={$useVoice} onclick={toggleVoice} disabled={micLoading}>{micLoading?$t.notch_requesting:$useVoice?$t.notch_mic_on:$t.notch_enable_mic}</button>
+        
+        <!-- Auxiliary Inputs Grid -->
+        <div class="aux-grid">
+          <!-- Upload block -->
+          <div class="aux-card">
+            <span class="aux-label">{$t.notch_upload_audio}</span>
+            <div class="aux-actions">
+              <input type="file" accept="audio/*" bind:this={fileInputEl} onchange={handleUpload} style="display:none" />
+              <button type="button" class="glass-btn-secondary" onclick={()=>fileInputEl?.click()} style="padding: 8px 16px; font-size: 13px; width: 100%; border-radius: 10px;">
+                {$useUpload ? $t.notch_uploaded : $t.notch_select_file}
+              </button>
+              {#if $useUpload}
+                <button type="button" class="glass-btn-secondary" onclick={clearUpload} style="padding: 8px 12px; font-size: 13px; border-radius: 10px;">
+                  {$t.notch_clear}
+                </button>
+              {/if}
+            </div>
+            {#if $useUpload}
+              <span class="aux-filename" title={$uploadedFileName}>{$uploadedFileName}</span>
+            {/if}
+            {#if uploadError}
+              <span class="aux-error">{uploadError}</span>
+            {/if}
+          </div>
+
+          <!-- Mic block -->
+          <div class="aux-card">
+            <span class="aux-label">{$t.notch_mic}</span>
+            <button 
+              type="button"
+              class="glass-btn-secondary" 
+              class:active={$useVoice}
+              onclick={toggleVoice} 
+              disabled={micLoading}
+              style="padding: 8px 16px; font-size: 13px; width: 100%; border-radius: 10px;"
+            >
+              {micLoading ? $t.notch_requesting : $useVoice ? $t.notch_mic_on : $t.notch_enable_mic}
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Bandwidth selector with contextual hint -->
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_bandwidth}</label>
-        <div class="chip-group" role="radiogroup">
-          {#each bandwidths as bw}
-            <button class="glass-chip" class:selected={$notchParams.left.bandwidth===bw.id} onclick={()=>notchParams.update(p=>{p.left.bandwidth=bw.id;return p;})}>{bw.label}</button>
-          {/each}
+      <!-- Card 2: Therapy Parameters -->
+      <div class="settings-card glass">
+        <h3 class="card-section-title">{$t.notch_therapy_params}</h3>
+        
+        <!-- Bandwidth Selection -->
+        <div class="param-row">
+          <div class="param-row-header">
+            <span class="param-title">{$t.notch_bandwidth}</span>
+          </div>
+          <div class="param-options">
+            {#each bandwidths as bw}
+              <button 
+                type="button"
+                class="glass-chip" 
+                class:selected={$notchParams.left.bandwidth === bw.id} 
+                onclick={() => notchParams.update(p => { p.left.bandwidth = bw.id; return p; })}
+              >
+                {bw.label}
+              </button>
+            {/each}
+          </div>
+          <div class="param-hint-box">
+            {#if $notchParams.left.bandwidth === "narrow"}{$t.notch_bandwidth_narrow_hint}
+            {:else if $notchParams.left.bandwidth === "medium"}{$t.notch_bandwidth_medium_hint}
+            {:else if $notchParams.left.bandwidth === "wide"}{$t.notch_bandwidth_wide_hint}
+            {/if}
+          </div>
         </div>
-        <div class="param-hint">
-          {#if $notchParams.left.bandwidth==="narrow"}{$t.notch_bandwidth_narrow_hint}
-          {:else if $notchParams.left.bandwidth==="medium"}{$t.notch_bandwidth_medium_hint}
-          {:else if $notchParams.left.bandwidth==="wide"}{$t.notch_bandwidth_wide_hint}
-          {/if}
-        </div>
-      </div>
 
-      <!-- Depth selector with contextual hint -->
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_depth}</label>
-        <div class="chip-group" role="radiogroup">
-          {#each depths as d}
-            <button class="glass-chip" class:selected={$notchParams.left.depth===d.id} onclick={()=>notchParams.update(p=>{p.left.depth=d.id;return p;})}>{d.label}</button>
-          {/each}
+        <!-- Depth Selection -->
+        <div class="param-row">
+          <div class="param-row-header">
+            <span class="param-title">{$t.notch_depth}</span>
+          </div>
+          <div class="param-options">
+            {#each depths as d}
+              <button 
+                type="button"
+                class="glass-chip" 
+                class:selected={$notchParams.left.depth === d.id} 
+                onclick={() => notchParams.update(p => { p.left.depth = d.id; return p; })}
+              >
+                {d.label}
+              </button>
+            {/each}
+          </div>
+          <div class="param-hint-box">
+            {#if $notchParams.left.depth === -20}{$t.notch_depth_20_hint}
+            {:else if $notchParams.left.depth === -12}{$t.notch_depth_12_hint}
+            {:else if $notchParams.left.depth === -6}{$t.notch_depth_6_hint}
+            {:else if $notchParams.left.depth === -3}{$t.notch_depth_3_hint}
+            {/if}
+          </div>
         </div>
-        <div class="param-hint">
-          {#if $notchParams.left.depth===-20}{$t.notch_depth_20_hint}
-          {:else if $notchParams.left.depth===-12}{$t.notch_depth_12_hint}
-          {:else if $notchParams.left.depth===-6}{$t.notch_depth_6_hint}
-          {:else if $notchParams.left.depth===-3}{$t.notch_depth_3_hint}
-          {/if}
-        </div>
-      </div>
 
-      <div class="control-row">
-        <label class="text-caption-strong">{$t.notch_duration}</label>
-        <div class="chip-group" role="radiogroup">
-          {#each [15,30,45,60] as dur}
-            <button class="glass-chip" class:selected={$sessionDuration===dur} onclick={()=>sessionDuration.set(dur)}>{dur} {$t.notch_min}</button>
-          {/each}
+        <!-- Duration Selection -->
+        <div class="param-row">
+          <div class="param-row-header">
+            <span class="param-title">{$t.notch_duration}</span>
+          </div>
+          <div class="param-options">
+            {#each [15,30,45,60] as dur}
+              <button 
+                type="button"
+                class="glass-chip" 
+                class:selected={$sessionDuration === dur} 
+                onclick={() => sessionDuration.set(dur)}
+              >
+                {dur} {$t.notch_min}
+              </button>
+            {/each}
+          </div>
         </div>
       </div>
-      <button class="glass-btn-hero start-btn" onclick={startSession}>{$t.notch_start_therapy}</button>
-      <button class="glass-btn-secondary" onclick={()=>therapyView.set("match")}>{$t.notch_skip_today}</button>
+      
+      <!-- Action buttons -->
+      <div class="therapy-actions" style="display:flex; flex-direction:column; gap:12px; width:100%; align-items:center; margin-top:8px;">
+        <button class="glass-btn-hero start-btn" onclick={startSession} style="width:100%; max-width:320px;">{$t.notch_start_therapy}</button>
+        <button class="glass-btn-secondary" onclick={()=>therapyView.set("match")} style="width:100%; max-width:320px; border-radius: var(--glass-radius-sm);">{$t.notch_skip_today}</button>
+      </div>
     </div>
     <button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button>
   </div>
@@ -981,5 +1119,369 @@
   font-weight: 700;
   color: #a29bfe;
 }
-</style>
 
+  /* Premium Complete Configuration Styles */
+  .match-dashboard {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 16px 24px;
+    box-shadow: var(--glass-shadow);
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+  .light-mode .match-dashboard {
+    background: rgba(255, 255, 255, 0.65);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  .dash-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .dash-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .dash-value {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+  }
+  .dash-unit {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .dash-divider {
+    width: 1px;
+    height: 48px;
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .light-mode .dash-divider {
+    background: rgba(0, 0, 0, 0.08);
+  }
+  .dash-confidence {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .confidence-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: #a29bfe;
+    background: rgba(108, 92, 231, 0.15);
+    padding: 2px 8px;
+    border-radius: 8px;
+    text-transform: uppercase;
+  }
+  .light-mode .confidence-text {
+    color: #6c5ce7;
+    background: rgba(108, 92, 231, 0.06);
+  }
+
+  .settings-card {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: var(--glass-shadow);
+    box-sizing: border-box;
+  }
+  .light-mode .settings-card {
+    background: rgba(255, 255, 255, 0.65);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+  .card-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #a29bfe;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    text-align: left;
+    border-left: 3px solid #6c5ce7;
+    padding-left: 8px;
+    margin-bottom: 2px;
+  }
+  .light-mode .card-section-title {
+    color: #6c5ce7;
+    border-left-color: #6c5ce7;
+  }
+
+  /* Carrier Section Styles */
+  .carrier-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+  .none-carrier-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s var(--spring-smooth);
+    box-sizing: border-box;
+  }
+  .none-carrier-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .none-carrier-btn.active {
+    background: rgba(108, 92, 231, 0.15);
+    border-color: rgba(108, 92, 231, 0.4);
+    box-shadow: 0 0 16px rgba(108, 92, 231, 0.1);
+  }
+  .light-mode .none-carrier-btn {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  .light-mode .none-carrier-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+  .light-mode .none-carrier-btn.active {
+    background: rgba(108, 92, 231, 0.08);
+    border-color: rgba(108, 92, 231, 0.3);
+  }
+  .none-icon {
+    font-size: 20px;
+  }
+  .none-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .none-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .none-subtitle {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .carrier-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin: 4px 0;
+  }
+  .carrier-divider::before, .carrier-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .light-mode .carrier-divider::before, .light-mode .carrier-divider::after {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+  }
+  .carrier-divider:not(:empty)::before {
+    margin-right: .5em;
+  }
+  .carrier-divider:not(:empty)::after {
+    margin-left: .5em;
+  }
+
+  .noises-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    width: 100%;
+  }
+  @media (max-width: 520px) {
+    .noises-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  .noise-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s var(--spring-smooth);
+    box-sizing: border-box;
+  }
+  .noise-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+  }
+  .noise-card.selected {
+    background: rgba(108, 92, 231, 0.18);
+    border-color: rgba(108, 92, 231, 0.5);
+    box-shadow: 0 0 16px rgba(108, 92, 231, 0.2);
+  }
+  .light-mode .noise-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+  .light-mode .noise-card:hover {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.12);
+  }
+  .light-mode .noise-card.selected {
+    background: rgba(108, 92, 231, 0.08);
+    border-color: rgba(108, 92, 231, 0.3);
+  }
+  .noise-icon {
+    font-size: 18px;
+  }
+  .noise-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .noise-card.selected .noise-name {
+    color: var(--text-primary);
+  }
+
+  /* Auxiliary Input Grid Styles */
+  .aux-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+    margin-top: 4px;
+  }
+  @media (max-width: 480px) {
+    .aux-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .aux-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 14px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .light-mode .aux-card {
+    background: rgba(0, 0, 0, 0.01);
+    border-color: rgba(0, 0, 0, 0.05);
+  }
+  .aux-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .aux-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+  }
+  .aux-filename {
+    font-size: 11px;
+    color: #a29bfe;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: rgba(108, 92, 231, 0.1);
+    border: 1px solid rgba(108, 92, 231, 0.15);
+    border-radius: 6px;
+    padding: 4px 8px;
+    box-sizing: border-box;
+    text-align: left;
+    width: 100%;
+  }
+  .light-mode .aux-filename {
+    color: #6c5ce7;
+    background: rgba(108, 92, 231, 0.05);
+    border-color: rgba(108, 92, 231, 0.1);
+  }
+  .aux-error {
+    font-size: 11px;
+    color: #ff7675;
+    text-align: left;
+  }
+
+  /* Parameter Row Styles */
+  .param-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    box-sizing: border-box;
+  }
+  .param-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .light-mode .param-row {
+    border-bottom-color: rgba(0, 0, 0, 0.05);
+  }
+  .param-row-header {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+  }
+  .param-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+  }
+  .param-options {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .param-hint-box {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    background: rgba(108, 92, 231, 0.06);
+    border: 1px solid rgba(108, 92, 231, 0.12);
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-align: left;
+    transition: opacity 0.2s;
+  }
+  .light-mode .param-hint-box {
+    background: rgba(108, 92, 231, 0.03);
+    border-color: rgba(108, 92, 231, 0.08);
+    color: var(--text-secondary);
+  }
+</style>
