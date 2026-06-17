@@ -13,7 +13,8 @@
     {id:"schumann", label:"Schumann", freq:"7.83 Hz", key:"bw_grounding"},
     {id:"isochronic", label:"Custom", freq:"Adjustable", key:"bw_custom"},
   ];
-  let isRunning=false, timerInterval=null, elapsed=0, bgNoiseNodes=[], paused=false;
+  let isRunning=false, timerInterval=null, elapsed=0, bgNoiseNodes=[];
+  $: paused = $sessionActive && !$isPlaying;
 
   function startTimer() {
     if (timerInterval) clearInterval(timerInterval);
@@ -33,13 +34,11 @@
   }
 
   $: if ($sessionActive) {
-    if ($isPlaying && paused) {
+    if ($isPlaying) {
       resumeAudio();
-      paused = false;
       startTimer();
-    } else if (!$isPlaying && !paused) {
+    } else {
       suspendAudio();
-      paused = true;
       stopTimer();
     }
   }
@@ -49,17 +48,16 @@
   function updateBgNoise(){bgNoiseNodes.forEach(n=>{try{n.stop();}catch(e){}try{n.disconnect();}catch(e){}});bgNoiseNodes=[];if($brainwaveBgNoise){const ctx=getAudioContext();const buffer=createWhiteNoise(30);const src=ctx.createBufferSource();src.buffer=buffer;src.loop=true;const g=ctx.createGain();g.gain.value=.05;src.connect(g);g.connect(getMasterGain());src.start();bgNoiseNodes=[src,g];}}
   function toggleSession(){if(isRunning)stopAll();else startSession();}
   function startSession(){
+    resumeAudio();
     const f=$brainwaveMode==="isochronic"?$brainwaveCustomFreq:null;
     startBrainwave($brainwaveMode,$brainwaveType,f);
     isRunning=true;
     isPlaying.set(true);
     sessionActive.set(true);
-    paused=false;
     elapsed=0;
     remainingTime.set($brainwaveTimer * 60);
     audioProgress.set(0);
     updateBgNoise();
-    startTimer();
   }
   function stopAll(){
     stopBrainwave();
@@ -94,7 +92,7 @@
           <div class="control-group"><label class="text-caption-strong">{$t.bw_duration}</label><div class="chip-group" role="radiogroup">{#each [15,30,45,60] as dur}<button class="glass-chip" class:selected={$brainwaveTimer===dur} onclick={()=>selectTimer(dur)}>{dur} {$t.notch_min}</button>{/each}</div></div>
       <div class="control-group"><button class="glass-chip" class:selected={$brainwaveBgNoise} onclick={toggleBgNoise}>{$t.bw_white_noise_bg} {$brainwaveBgNoise?$t.bw_on:$t.bw_off}</button></div>
     </div>
-    <div class="action-bar">{#if isRunning}<button class="glass-btn-secondary" onclick={toggleBwPause}>{isAudioSuspended()?$t.notch_resume:$t.notch_pause}</button><button class="glass-btn-hero start-btn" onclick={stopAll}>{$t.bw_stop}</button>{:else}<button class="glass-btn-hero start-btn" onclick={toggleSession}>{$t.bw_start}</button>{/if}</div>
+    <div class="action-bar">{#if isRunning}<button class="glass-btn-secondary" onclick={toggleBwPause}>{paused?$t.notch_resume:$t.notch_pause}</button><button class="glass-btn-hero start-btn" onclick={stopAll}>{$t.bw_stop}</button>{:else}<button class="glass-btn-hero start-btn" onclick={toggleSession}>{$t.bw_start}</button>{/if}</div>
   </div>
 </div>
 <style>

@@ -144,6 +144,7 @@ const en = {
   rec_title: 'Treatment Records',
   rec_calendar: 'Calendar',
   rec_list: 'List',
+  rec_trends: 'Trends',
   rec_no_records: 'No records yet',
   rec_notch_therapy: 'Notch Therapy',
   rec_brainwave: 'Brainwave',
@@ -175,6 +176,13 @@ const en = {
   set_license: 'Notch music therapy | Open source (MIT)',
   set_privacy: 'All data stored locally | No cloud | No account',
   set_disclaimer: 'Disclaimer: This app is not a substitute for medical diagnosis. If you experience pulsatile tinnitus or sudden hearing loss, please consult a doctor.',
+  notch_bandwidth_narrow_hint: 'Narrow (1/3 oct): Most precise. Best for pure-tone whistle tinnitus matched with high precision.',
+  notch_bandwidth_medium_hint: 'Medium (1/2 oct): Recommended. Balanced treatment effect and audio quality for most patients.',
+  notch_bandwidth_wide_hint: 'Wide (1 oct): Maximum suppression. Best for white/pink noise carriers, providing strong lateral inhibition.',
+  notch_depth_20_hint: '-20 dB: Maximum efficacy. Recommended default for White/Pink noise to maximize lateral inhibition.',
+  notch_depth_12_hint: '-12 dB: Recommended. Balanced notch depth that preserves musical melody and ambient details.',
+  notch_depth_6_hint: '-6 dB: Gentle adaptation. Best for early music training phase or individuals with hyperacusis.',
+  notch_depth_3_hint: '-3 dB: Minimum transition. Only for transient adjustment if extremely sensitive; daily therapy not advised.',
 };
 
 const zh = {
@@ -313,6 +321,7 @@ const zh = {
   rec_title: '治疗记录',
   rec_calendar: '月视图',
   rec_list: '列表',
+  rec_trends: '趋势',
   rec_no_records: '暂无记录',
   rec_notch_therapy: '切迹治疗',
   rec_brainwave: '脑波',
@@ -342,6 +351,13 @@ const zh = {
   set_license: '耳鸣切迹音乐疗法 | 开源免费 (MIT)',
   set_privacy: '所有数据存储本机 | 无需联网 | 无需注册',
   set_disclaimer: '声明：本应用不可替代医学诊断。如有搏动性耳鸣或听力骤降，请及时就医。',
+  notch_bandwidth_narrow_hint: '窄带宽 (1/3倍频程)：极精准。最适合匹配度非常高、声音单一纯粹（如尖锐蝉鸣/哨声）的耳鸣。',
+  notch_bandwidth_medium_hint: '中带宽 (1/2倍频程)：平衡档（推荐）。在提供侧抑制疗效的同时，最大程度保留音乐/自然音的听感细节。',
+  notch_bandwidth_wide_hint: '宽带宽 (1倍频程)：广覆盖（强效）。提供最强烈的声学侧抑制，建议在播放纯白/粉红噪音时选用。',
+  notch_depth_20_hint: '-20 dB (强效)：常规治疗首选。深度去除耳鸣频点能量，适合白噪音/粉红噪音以获得最佳疗效。',
+  notch_depth_12_hint: '-12 dB (推荐)：平衡档。兼顾滤波疗效与载体保真度，最适合音乐或自然声景播放。',
+  notch_depth_6_hint: '-6 dB (温和)：适应期过渡。适合治疗初期适应，或听力高度敏感、无法耐受深层滤波的患者。',
+  notch_depth_3_hint: '-3 dB (极微)：超敏感过渡。仅在极度敏感时作短暂几天过渡，侧抑制作用较弱，日常不推荐。',
 };
 
 export const t = derived(locale, $locale => {

@@ -1,33 +1,157 @@
 <script>
   import { matchMethod, matchEar, matchStep, matchTotalSteps, matchResults, matchConfidence, matchPhase, notchParams, sessionTimer, sessionDuration, postFeeling, postSeverity, postNote, tinnitusToday, useVoice, useUpload, uploadedFileName } from "../stores/therapy.js";
-  import { isPlaying, isMicromode, records, currentMode, therapyView, onboardingComplete, sessionActive } from "../stores/app.js";
+  import { isPlaying, isMicromode, records, currentMode, therapyView, onboardingComplete, sessionActive, activeTab } from "../stores/app.js";
   import { createMatchingSession, startTherapy, stopTherapy, updateTherapyParams, loadUploadedAudio, clearUploadedAudio, startMic, stopMic } from "../audio/notch.js";
-  import { getAudioContext, setMasterVolume, getAnalyserNode, suspendAudio, resumeAudio, isAudioSuspended } from "../audio/engine.js";
+  import { getAudioContext, setMasterVolume, getAnalyserNode, suspendAudio, resumeAudio, isAudioSuspended, getMasterGain } from "../audio/engine.js";
   import { remainingTime, audioProgress } from "../stores/audio.js";
   import { t } from "../stores/locale.js";
-  let session,currentFreqA=0,currentFreqB=0,matchingComplete=false,matchFreqResult=null,sessionInterval=null,sessionElapsed=0,selectedCarrier="white",uploadError="",micLoading=false,fileInputEl,useNoise=false,manualFreq=4000,manualPlaying=false,manualOsc=null,manualFineMode=false,manualFineCenter=4000,spectrumAnimFrame=null;
+  let session,currentFreqA=0,currentFreqB=0,matchingComplete=false,matchFreqResult=null,sessionInterval=null,sessionElapsed=0,selectedCarrier="white",uploadError="",micLoading=false,fileInputEl,useNoise=false,manualFreq=4000,manualPlaying=false,manualOsc=null,manualGainNode=null,manualFineMode=false,manualFineCenter=4000,spectrumAnimFrame=null;
   const bandwidths=[{id:"narrow",label:"Narrow (1/3 oct)"},{id:"medium",label:"Medium (1/2 oct)"},{id:"wide",label:"Wide (1 oct)"}];
   const depths=[{id:-3,label:"-3 dB"},{id:-6,label:"-6 dB"},{id:-12,label:"-12 dB"},{id:-20,label:"-20 dB"}];
-  let dailyCheckDone=false;function answerDaily(a){tinnitusToday.set(a);dailyCheckDone=true;if(a==="no")currentMode.set("sleep");}
+  let dailyCheckDone=false;
+  function answerDaily(a){
+    tinnitusToday.set(a);
+    dailyCheckDone=true;
+    if(a==="no") {
+      activeTab.set(2);
+      currentMode.set("sleep");
+    }
+  }
   let onboardingStep=0;
   const oSteps=[{title:$t.notch_onboarding_1_title,desc:$t.notch_onboarding_1_desc},{title:$t.notch_onboarding_2_title,desc:$t.notch_onboarding_2_desc},{title:$t.notch_onboarding_3_title,desc:$t.notch_onboarding_3_desc}];
   function nextO(){if(onboardingStep<2)onboardingStep++;else{onboardingComplete.set(true);matchPhase.set("method-select");}}
-  function selectMethod(m){resetMatching();matchMethod.set(m);matchPhase.set(m==="manual"?"manual-match":"ear-select");}
+  function selectMethod(m){
+    resetMatching();
+    matchMethod.set(m);
+    matchPhase.set("ear-select");
+  }
   function resetMatching(){session=null;currentFreqA=0;currentFreqB=0;matchingComplete=false;matchFreqResult=null;matchStep.set(0);matchEar.set("left");matchResults.set({left:null,right:null,confidence:0});matchConfidence.set(0);useNoise=false;}
-  function goBack(){const m={"ear-select":"method-select","manual-match":"method-select","matching":"ear-select","verification":"matching","complete":"verification","result":"complete"};if(m[$matchPhase])matchPhase.set(m[$matchPhase]);}
-  function selectEar(e){matchEar.set(e);if($matchMethod==="2afc"){session=createMatchingSession();matchStep.set(0);currentFreqA=0;currentFreqB=0;matchPhase.set("matching");nextPair();}}
-  function nextPair(){const p=session.getNextFreqs();if(p){currentFreqA=p.freqA;currentFreqB=p.freqB;session.playPair(p.freqA,p.freqB,useNoise);}else finishMatching();}
-  function playSingleTone(f){const c=getAudioContext();const o=c.createOscillator();o.type="sine";o.frequency.value=f;const g=c.createGain();g.gain.value=0.3;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+1.5);}
+  function goBack(){
+    const m={
+      "ear-select":"method-select",
+      "manual-match":"ear-select",
+      "matching":"ear-select",
+      "verification":$matchMethod==="manual"?"manual-match":"matching",
+      "complete":"verification",
+      "result":"complete"
+    };
+    if(m[$matchPhase])matchPhase.set(m[$matchPhase]);
+  }
+  function selectEar(e){
+    matchEar.set(e);
+    if($matchMethod==="2afc"){
+      session=createMatchingSession();
+      matchStep.set(0);
+      currentFreqA=0;
+      currentFreqB=0;
+      matchPhase.set("matching");
+      nextPair();
+    } else if($matchMethod==="manual") {
+      matchPhase.set("manual-match");
+    }
+  }
+  function nextPair(){
+    const p=session.getNextFreqs();
+    if(p){
+      currentFreqA=p.freqA;
+      currentFreqB=p.freqB;
+      session.playPair(p.freqA,p.freqB,useNoise,$matchEar);
+    } else finishMatching();
+  }
+  function playSingleTone(f){
+    const c=getAudioContext();
+    const o=c.createOscillator();
+    o.type="sine";
+    o.frequency.value=f;
+    const g=c.createGain();
+    const startTime=c.currentTime;
+    const duration=1.5;
+    g.gain.setValueAtTime(0,startTime);
+    g.gain.linearRampToValueAtTime(0.3,startTime+0.1);
+    g.gain.setValueAtTime(0.3,startTime+duration-0.1);
+    g.gain.linearRampToValueAtTime(0,startTime+duration);
+    o.connect(g);
+    const ear=$matchEar;
+    if(ear==="left"||ear==="right"){
+      const panner=c.createStereoPanner();
+      panner.pan.value=ear==="left"?-1:1;
+      g.connect(panner);
+      panner.connect(getMasterGain());
+    }else{
+      g.connect(getMasterGain());
+    }
+    o.start(startTime);
+    o.stop(startTime+duration);
+  }
   function chooseFreq(c){matchFreqResult=c;session.advance(c);matchStep.set(session.currentStep);matchConfidence.set(session.getConfidence());setTimeout(()=>nextPair(),500);}
   function finishMatching(){matchFreqResult=session.getResult();matchResults.set({left:matchFreqResult,right:null,confidence:session.getConfidence()});matchConfidence.set(session.getConfidence());notchParams.update(p=>{p.left.frequency=matchFreqResult;return p;});matchPhase.set("verification");}
-  function playTestTone(f){const c=getAudioContext();if(manualOsc){try{manualOsc.stop();}catch(e){}manualOsc=null;}manualOsc=c.createOscillator();manualOsc.type="sine";manualOsc.frequency.value=f;const g=c.createGain();g.gain.value=0.3;manualOsc.connect(g);g.connect(c.destination);manualOsc.start();manualPlaying=true;}
+  function playTestTone(f){
+    const c=getAudioContext();
+    if(manualOsc){
+      try{manualOsc.frequency.setValueAtTime(f,c.currentTime);}catch(e){}
+      return;
+    }
+    manualOsc=c.createOscillator();
+    manualOsc.type="sine";
+    manualOsc.frequency.value=f;
+    manualGainNode=c.createGain();
+    manualGainNode.gain.setValueAtTime(0,c.currentTime);
+    manualGainNode.gain.linearRampToValueAtTime(0.3,c.currentTime+0.1);
+    manualOsc.connect(manualGainNode);
+    const ear=$matchEar;
+    if(ear==="left"||ear==="right"){
+      const panner=c.createStereoPanner();
+      panner.pan.value=ear==="left"?-1:1;
+      manualGainNode.connect(panner);
+      panner.connect(getMasterGain());
+    }else{
+      manualGainNode.connect(getMasterGain());
+    }
+    manualOsc.start();
+    manualPlaying=true;
+  }
+  function stopTestTone(){
+    if(manualOsc){
+      const osc=manualOsc;
+      const gain=manualGainNode;
+      const c=getAudioContext();
+      try{
+        gain.gain.setValueAtTime(gain.gain.value,c.currentTime);
+        gain.gain.linearRampToValueAtTime(0,c.currentTime+0.15);
+      }catch(e){}
+      manualOsc=null;
+      manualGainNode=null;
+      manualPlaying=false;
+      setTimeout(()=>{
+        try{osc.stop();}catch(e){}
+        try{osc.disconnect();}catch(e){}
+        try{gain.disconnect();}catch(e){}
+      },160);
+    }
+  }
   async function handleUpload(){const f=fileInputEl?.files?.[0];if(!f)return;uploadError="";try{await loadUploadedAudio(f);uploadedFileName.set(f.name);useUpload.set(true);}catch(e){uploadError=$t.notch_unsupported_format;useUpload.set(false);}}
   function clearUpload(){clearUploadedAudio();uploadedFileName.set("");useUpload.set(false);}
   async function toggleVoice(){if($useVoice){stopMic();useVoice.set(false);}else{micLoading=true;const ok=await startMic();useVoice.set(ok);if(!ok)uploadError=$t.notch_mic_denied;micLoading=false;}}
-  function stopTestTone(){if(manualOsc){try{manualOsc.stop();}catch(e){}manualOsc=null;}manualPlaying=false;}
   function toggleManualFine(){if(!manualFineMode){manualFineCenter=manualFreq;manualFineMode=true;}else manualFineMode=false;}
   function confirmManual(){matchResults.set({left:manualFreq,right:null,confidence:3});matchConfidence.set(3);notchParams.update(p=>{p.left.frequency=manualFreq;return p;});stopTestTone();matchPhase.set("verification");}
   function verifyAccept(){matchPhase.set("complete");}function verifyRetune(){resetMatching();matchPhase.set("method-select");}
+  function freqToLogPct(f, min = 125, max = 12000) {
+    if (f < min) f = min;
+    if (f > max) f = max;
+    return (Math.log(f / min) / Math.log(max / min)) * 100;
+  }
+  function logPctToFreq(pct, min = 125, max = 12000) {
+    return Math.round(min * Math.pow(max / min, pct / 100));
+  }
+  function handleDirectFreqInput() {
+    if (manualFreq < 20) manualFreq = 20;
+    if (manualFreq > 16000) manualFreq = 16000;
+    if (manualPlaying) {
+      playTestTone(manualFreq);
+    } else {
+      playSingleTone(manualFreq);
+    }
+  }
   let paused=false;
   function startTimer(){
     if(sessionInterval)clearInterval(sessionInterval);
@@ -70,7 +194,7 @@
 {:else if $matchPhase==="method-select"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_select_method}</h2><p class="desc">{$t.notch_method_desc}</p><div class="method-grid"><button class="method-card" onclick={()=>selectMethod("2afc")}><div class="method-name">{$t.notch_adaptive}</div><div class="method-desc">{$t.notch_adaptive_desc}</div></button><button class="method-card" onclick={()=>selectMethod("manual")}><div class="method-name">{$t.notch_manual}</div><div class="method-desc">{$t.notch_manual_desc}</div></button></div></div>
   {:else if $matchPhase==="ear-select"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_select_ear}</h2><p class="desc">{$t.notch_ear_desc}</p><div class="ear-grid">{#each ["left","right","both"] as ear}<button class="ear-card" onclick={()=>selectEar(ear)}><div class="ear-name">{ear==="left"?$t.notch_left:ear==="right"?$t.notch_right:$t.notch_both}</div></button>{/each}</div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
 {:else if $matchPhase==="matching"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_freq_matching}</h2><div class="progress-info"><span class="text-body">{$t.notch_round} {$matchStep}/{$matchTotalSteps}<span class="phase-badge">{session?.phase==="coarse"?$t.notch_coarse:$t.notch_fine}</span></span><div class="progress-bar-compact"><div class="progress-fill-compact" style="width:{Math.min($matchStep/$matchTotalSteps*100,100)}%"></div></div></div><p class="desc">{$t.notch_which_sound}</p><div class="afc-grid"><button class="afc-btn" onclick={()=>chooseFreq(currentFreqA)}><span class="afc-label">{$t.notch_sound_a}</span><span class="afc-freq">{Math.round(currentFreqA)} Hz</span></button><button class="afc-btn" onclick={()=>chooseFreq(currentFreqB)}><span class="afc-label">{$t.notch_sound_b}</span><span class="afc-freq">{Math.round(currentFreqB)} Hz</span></button></div><div class="replay-row"><button class="btn-secondary replay-btn" onclick={()=>playSingleTone(currentFreqA)}>{$t.notch_sound_a}</button><button class="btn-secondary replay-btn" onclick={()=>playSingleTone(currentFreqB)}>{$t.notch_sound_b}</button></div><div class="matching-tools"><button class="glass-chip" class:selected={useNoise} onclick={()=>useNoise=!useNoise}>{useNoise?$t.notch_narrowband:$t.notch_pure_tone}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
-  {:else if $matchPhase==="manual-match"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_manual_title}</h2><p class="desc">{manualFineMode?$t.notch_manual_desc_fine:$t.notch_manual_desc_coarse}</p><div class="manual-controls"><div class="slider-with-ticks"><input type="range" min={manualFineMode?Math.max(20,manualFineCenter-100):125} max={manualFineMode?Math.min(16000,manualFineCenter+100):12000} step={manualFineMode?1:50} bind:value={manualFreq} class="freq-slider" oninput={()=>{if(manualPlaying)playTestTone(manualFreq);}} onmousedown={()=>playTestTone(manualFreq)} onmouseup={stopTestTone} /><div class="tick-marks">{#if manualFineMode}{#each Array(21) as _,i}{@const thz=manualFineCenter-100+i*10}{@const fl=manualFineCenter-100}{@const fh=manualFineCenter+100}{@const pct=((thz-fl)/(fh-fl))*100}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{:else}{#each [125,250,500,1000,2000,4000,6000,8000,12000] as thz}{@const pct=((thz-125)/(12000-125))*100}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{/if}</div></div><div class="freq-display"><input type="number" min="20" max="16000" bind:value={manualFreq} class="freq-input" onchange={()=>{if(manualPlaying)playTestTone(manualFreq);}} /><span class="text-body">Hz</span></div><div class="manual-actions"><button class="glass-btn-primary" onclick={confirmManual}>{$t.notch_confirm}</button><button class="glass-btn-secondary" onclick={()=>playTestTone(manualFreq)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={stopTestTone}>{$t.notch_stop}</button><button class="glass-btn-secondary" onclick={toggleManualFine}>{manualFineMode?$t.notch_back_coarse:$t.notch_fine_tune}</button></div></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
+  {:else if $matchPhase==="manual-match"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_manual_title}</h2><p class="desc">{manualFineMode?$t.notch_manual_desc_fine:$t.notch_manual_desc_coarse}</p><div class="manual-controls"><div class="slider-with-ticks">{#if manualFineMode}<input type="range" min={Math.max(20,manualFineCenter-100)} max={Math.min(16000,manualFineCenter+100)} step="1" bind:value={manualFreq} class="freq-slider" oninput={()=>{if(manualPlaying)playTestTone(manualFreq);}} onmousedown={()=>playTestTone(manualFreq)} onmouseup={stopTestTone} />{:else}<input type="range" min="0" max="100" step="0.01" value={freqToLogPct(manualFreq,125,12000)} class="freq-slider" oninput={(e)=>{manualFreq=logPctToFreq(parseFloat(e.target.value),125,12000);if(manualPlaying)playTestTone(manualFreq);}} onmousedown={()=>playTestTone(manualFreq)} onmouseup={stopTestTone} />{/if}<div class="tick-marks">{#if manualFineMode}{#each Array(21) as _,i}{@const thz=manualFineCenter-100+i*10}{@const fl=manualFineCenter-100}{@const fh=manualFineCenter+100}{@const pct=((thz-fl)/(fh-fl))*100}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{:else}{#each [125,250,500,1000,2000,4000,6000,8000,12000] as thz}{@const pct=freqToLogPct(thz,125,12000)}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{/if}</div></div><div class="freq-display"><input type="number" min="20" max="16000" bind:value={manualFreq} class="freq-input" onchange={handleDirectFreqInput} /><span class="text-body">Hz</span></div><div class="manual-actions"><button class="glass-btn-primary" onclick={confirmManual}>{$t.notch_confirm}</button><button class="glass-btn-secondary" onclick={()=>playTestTone(manualFreq)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={stopTestTone}>{$t.notch_stop}</button><button class="glass-btn-secondary" onclick={toggleManualFine}>{manualFineMode?$t.notch_back_coarse:$t.notch_fine_tune}</button></div></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
 {:else if $matchPhase==="verification"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_verify_title}</h2><p class="desc">{$t.notch_verify_desc} <strong>{Math.round($notchParams.left.frequency)} Hz</strong></p><div class="verification-actions"><button class="glass-btn-primary" onclick={verifyAccept}>{$t.notch_confirm_start}</button><button class="glass-btn-secondary" onclick={()=>playTestTone($notchParams.left.frequency)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={verifyRetune}>{$t.notch_rematch}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
   {:else if $matchPhase==="complete"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_complete_title}</h2><div class="match-report"><div class="report-item"><span class="text-caption">{$t.notch_frequency}</span><span class="text-display-md">{Math.round($notchParams.left.frequency)} Hz</span></div><div class="report-item"><span class="text-caption">{$t.notch_confidence}</span><div class="confidence-dots">{#each Array(5) as _,i}<span class="conf-dot" class:filled={i<$matchConfidence}></span>{/each}</div></div></div><div class="session-controls"><div class="control-row"><label class="text-caption-strong">{$t.notch_carrier}</label><div class="chip-group" role="radiogroup">{#each ["white","pink","ambient"] as c}<button class="glass-chip" class:selected={selectedCarrier===c} onclick={()=>selectedCarrier=c}>{c==="white"?$t.notch_white_noise:c==="pink"?$t.notch_pink_noise:$t.notch_ambient}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_upload_audio}</label><div class="chip-group"><input type="file" accept="audio/*" bind:this={fileInputEl} onchange={handleUpload} style="display:none" /><button class="glass-chip" onclick={()=>fileInputEl?.click()}>{$t.notch_select_file}</button>{#if $useUpload}<button class="glass-chip" onclick={clearUpload}>{$t.notch_clear}</button>{/if}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_mic}</label><div class="chip-group" role="radiogroup"><button class="glass-chip" class:selected={$useVoice} onclick={toggleVoice} disabled={micLoading}>{micLoading?$t.notch_requesting:$useVoice?$t.notch_mic_on:$t.notch_enable_mic}</button></div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_bandwidth}</label><div class="chip-group" role="radiogroup">{#each bandwidths as bw}<button class="glass-chip" class:selected={$notchParams.left.bandwidth===bw.id} onclick={()=>notchParams.update(p=>{p.left.bandwidth=bw.id;return p;})}>{bw.label}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_depth}</label><div class="chip-group" role="radiogroup">{#each depths as d}<button class="glass-chip" class:selected={$notchParams.left.depth===d.id} onclick={()=>notchParams.update(p=>{p.left.depth=d.id;return p;})}>{d.label}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_duration}</label><div class="chip-group" role="radiogroup">{#each [15,30,45,60] as dur}<button class="glass-chip" class:selected={$sessionDuration===dur} onclick={()=>sessionDuration.set(dur)}>{dur} {$t.notch_min}</button>{/each}</div></div><button class="glass-btn-hero start-btn" onclick={startSession}>{$t.notch_start_therapy}</button><button class="glass-btn-secondary" onclick={()=>therapyView.set("match")}>{$t.notch_skip_today}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
   {:else if $matchPhase==="result"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_session_complete}</h2><p class="desc">{$t.notch_how_feel}</p><div class="feeling-grid">{#each [{id:"better",label:$t.notch_better},{id:"unchanged",label:$t.notch_no_change},{id:"worse",label:$t.notch_worse}] as f}<button class="feeling-btn" class:selected={$postFeeling===f.id} onclick={()=>postFeeling.set(f.id)}>{f.label}</button>{/each}</div><div class="severity-slider"><label class="text-caption-strong" for="notch-severity">{$t.notch_current_level}</label><div class="slider-row"><span class="text-fine">0 {$t.notch_quiet}</span><input type="range" id="notch-severity" min="0" max="10" step="1" bind:value={$postSeverity} class="freq-slider" /><span class="text-fine">10 {$t.notch_loud}</span></div><span class="text-display-md severity-value">{$postSeverity}</span></div><div class="note-section"><label class="text-caption-strong" for="notch-notes">{$t.notch_notes}</label><textarea id="notch-notes" bind:value={$postNote} class="note-input" placeholder={$t.notch_notes_placeholder} rows="3"></textarea></div><button class="glass-btn-hero start-btn" onclick={submitRating} disabled={!$postFeeling}>{$t.notch_save_record}</button><button class="glass-btn-secondary" onclick={()=>matchPhase.set("method-select")}>{$t.notch_repeat}</button><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button><div class="privacy-note text-fine">{$t.notch_privacy}</div></div>

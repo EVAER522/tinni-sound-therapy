@@ -67,8 +67,11 @@ export function isMicActive() {
 }
 
 /**
- * Audio graph: (carrier noise + uploaded audio + mic) -> mixerGain -> NotchFilter -> DepthGain -> Master
+ * Audio graph: (carrier noise + uploaded audio + mic) -> mixerGain 
+ *                                                     -> dryGain (gain = depth) -------> Master
+ *                                                     -> notchFilter -> wetGain (1-depth) -> Master
  */
+
 export function startTherapy(frequency, bandwidth = "medium", depth = -12, carrier = "white", options = {}) {
   const { useVoice = false, useUpload = false } = options;
   const ctx = getAudioContext();
@@ -76,18 +79,28 @@ export function startTherapy(frequency, bandwidth = "medium", depth = -12, carri
   isRunning = true;
 
   const mixerGain = ctx.createGain();
-  mixerGain.gain.value = 0.7;
+  // Smooth fade-in: start at 0, ramp to 0.7 over 200ms
+  mixerGain.gain.setValueAtTime(0, ctx.currentTime);
+  mixerGain.gain.linearRampToValueAtTime(0.7, ctx.currentTime + 0.2);
 
-  const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
-  const notchFilter = createNotchFilter(frequency, Qmap[bandwidth] || 2.0);
+  const Qmap = { narrow: 4.32, medium: 2.87, wide: 1.41 };
+  const notchFilter = createNotchFilter(frequency, Qmap[bandwidth] || 2.87);
 
-  const depthGain = ctx.createGain();
+  const dryGain = ctx.createGain();
+  const wetGain = ctx.createGain();
+  
   const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
-  depthGain.gain.value = depthMap[String(depth)] || 0.25;
+  const g = depthMap[String(depth)] || 0.25;
+  
+  dryGain.gain.value = g;
+  wetGain.gain.value = 1 - g;
+
+  mixerGain.connect(dryGain);
+  dryGain.connect(getMasterGain());
 
   mixerGain.connect(notchFilter);
-  notchFilter.connect(depthGain);
-  depthGain.connect(getMasterGain());
+  notchFilter.connect(wetGain);
+  wetGain.connect(getMasterGain());
 
   const sourceNodes = [];
 
@@ -123,36 +136,54 @@ export function startTherapy(frequency, bandwidth = "medium", depth = -12, carri
     sourceNodes.push(micSrc, micGain);
   }
 
-  currentNodes = { mixerGain, notchFilter, depthGain, sourceNodes };
+  currentNodes = { mixerGain, notchFilter, dryGain, wetGain, sourceNodes };
   return currentNodes;
 }
 
 export function stopTherapy() {
   isRunning = false;
-  if (currentNodes.sourceNodes) {
-    currentNodes.sourceNodes.forEach((n) => {
-      try { if (n.stop) n.stop(); } catch (e) {}
-      try { n.disconnect(); } catch (e) {}
-    });
-  }
-  ["mixerGain", "notchFilter", "depthGain"].forEach((k) => {
-    const n = currentNodes[k];
-    if (n) try { n.disconnect(); } catch (e) {}
-  });
+  const ctx = getAudioContext();
+  const nodes = currentNodes;
   currentNodes = {};
+
+  if (nodes.mixerGain) {
+    try {
+      nodes.mixerGain.gain.setValueAtTime(nodes.mixerGain.gain.value, ctx.currentTime);
+      nodes.mixerGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15); // Smooth fade-out over 150ms
+    } catch (e) {}
+  }
+
+  // Disconnect and stop nodes after the fade-out completes
+  setTimeout(() => {
+    if (nodes.sourceNodes) {
+      nodes.sourceNodes.forEach((n) => {
+        try { if (n.stop) n.stop(); } catch (e) {}
+        try { n.disconnect(); } catch (e) {}
+      });
+    }
+    ["mixerGain", "notchFilter", "dryGain", "wetGain"].forEach((k) => {
+      const n = nodes[k];
+      if (n) try { n.disconnect(); } catch (e) {}
+    });
+  }, 160);
 }
 
 export function updateTherapyParams(frequency, bandwidth = "medium", depth = -12) {
-  const Qmap = { narrow: 4.3, medium: 2.0, wide: 1.0 };
+  const Qmap = { narrow: 4.32, medium: 2.87, wide: 1.41 };
   const notchFilter = currentNodes.notchFilter;
-  const depthGain = currentNodes.depthGain;
+  const dryGain = currentNodes.dryGain;
+  const wetGain = currentNodes.wetGain;
   if (notchFilter) {
     notchFilter.frequency.value = frequency;
-    notchFilter.Q.value = Qmap[bandwidth] || 2.0;
+    notchFilter.Q.value = Qmap[bandwidth] || 2.87;
   }
-  if (depthGain) {
-    const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
-    depthGain.gain.value = depthMap[String(depth)] || 0.25;
+  const depthMap = { "-3": 0.707, "-6": 0.5, "-12": 0.25, "-20": 0.1 };
+  const g = depthMap[String(depth)] || 0.25;
+  if (dryGain) {
+    dryGain.gain.value = g;
+  }
+  if (wetGain) {
+    wetGain.gain.value = 1 - g;
   }
 }
 
@@ -183,8 +214,11 @@ export function createMatchingSession() {
     activeNodes = [];
   }
 
-  function createToneNode(freq, startTime, duration, useNoise) {
+  function createToneNode(freq, startTime, duration, useNoise, ear) {
     const ctx = getAudioContext();
+    let sourceNode = null;
+    const nodes = [];
+
     if (useNoise) {
       const bufLen = ctx.sampleRate * duration;
       const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
@@ -196,35 +230,54 @@ export function createMatchingSession() {
       filter.type = "bandpass";
       filter.frequency.value = freq;
       filter.Q.value = 8;
-      const gain = ctx.createGain();
-      gain.gain.value = 0.3;
       src.connect(filter);
-      filter.connect(gain);
-      gain.connect(getMasterGain());
-      src.start(startTime);
-      src.stop(startTime + duration);
-      return [src, filter, gain];
+      sourceNode = filter;
+      nodes.push(src, filter);
     } else {
       const osc = ctx.createOscillator();
       osc.type = "sine";
       osc.frequency.value = freq;
-      const gain = ctx.createGain();
-      gain.gain.value = 0.3;
-      osc.connect(gain);
-      gain.connect(getMasterGain());
-      osc.start(startTime);
-      osc.stop(startTime + duration);
-      return [osc, gain];
+      sourceNode = osc;
+      nodes.push(osc);
     }
+
+    const gain = ctx.createGain();
+    // Fade in
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(0.3, startTime + 0.08);
+    // Sustain
+    gain.gain.setValueAtTime(0.3, startTime + duration - 0.08);
+    // Fade out
+    gain.gain.linearRampToValueAtTime(0, startTime + duration);
+
+    sourceNode.connect(gain);
+    nodes.push(gain);
+
+    // Stereo panning
+    if (ear === "left" || ear === "right") {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = ear === "left" ? -1 : 1;
+      gain.connect(panner);
+      panner.connect(getMasterGain());
+      nodes.push(panner);
+    } else {
+      gain.connect(getMasterGain());
+    }
+
+    if (nodes[0].start) {
+      nodes[0].start(startTime);
+      nodes[0].stop(startTime + duration);
+    }
+    return nodes;
   }
 
-  function playPair(freqA, freqB, useNoise) {
+  function playPair(freqA, freqB, useNoise, ear) {
     const ctx = getAudioContext();
     stopActiveNodes();
     const dur = 1.5;
     const gap = 1.0;
-    const nodesA = createToneNode(freqA, ctx.currentTime, dur, useNoise);
-    const nodesB = createToneNode(freqB, ctx.currentTime + dur + gap, dur, useNoise);
+    const nodesA = createToneNode(freqA, ctx.currentTime, dur, useNoise, ear);
+    const nodesB = createToneNode(freqB, ctx.currentTime + dur + gap, dur, useNoise, ear);
     activeNodes = [...nodesA, ...nodesB];
     return { freqA, freqB };
   }

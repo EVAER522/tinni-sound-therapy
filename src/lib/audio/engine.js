@@ -1,8 +1,9 @@
-﻿// Audio engine - core audio context and utilities for Web Audio API
+// Audio engine - core audio context and utilities for Web Audio API
 
 let audioCtx = null;
 let masterGain = null;
 let analyserNode = null;
+let isSuspendedIntentionally = false;
 
 export function getAudioContext() {
   if (!audioCtx) {
@@ -15,7 +16,7 @@ export function getAudioContext() {
     analyserNode.fftSize = 256;
     masterGain.connect(analyserNode);
   }
-  if (audioCtx.state === 'suspended') {
+  if (audioCtx.state === 'suspended' && !isSuspendedIntentionally) {
     audioCtx.resume();
   }
   return audioCtx;
@@ -28,7 +29,14 @@ export function getMasterGain() {
 
 export function setMasterVolume(val) {
   const g = getMasterGain();
-  g.gain.value = Math.max(0, Math.min(1, val));
+  const ctx = getAudioContext();
+  const targetVal = Math.max(0, Math.min(1, val));
+  try {
+    g.gain.setValueAtTime(g.gain.value, ctx.currentTime);
+    g.gain.linearRampToValueAtTime(targetVal, ctx.currentTime + 0.1);
+  } catch (e) {
+    g.gain.value = targetVal;
+  }
 }
 
 export function createWhiteNoise(duration = 1) {
@@ -123,12 +131,14 @@ export function getAnalyserNode() {
 }
 
 export function suspendAudio() {
+  isSuspendedIntentionally = true;
   if (audioCtx && audioCtx.state === 'running') {
     audioCtx.suspend();
   }
 }
 
 export function resumeAudio() {
+  isSuspendedIntentionally = false;
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume();
   }

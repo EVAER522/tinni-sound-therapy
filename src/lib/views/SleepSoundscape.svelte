@@ -6,6 +6,20 @@
   import { getAudioContext, getMasterGain } from "../audio/engine.js";
 
   let timerInterval=null, elapsed=0, playing=false, trackRefs=[];
+  
+  // Store cached AudioBuffers to prevent reloading gaps
+  const bufferCache = new Map();
+
+  async function getAudioBuffer(url, ctx) {
+    if (bufferCache.has(url)) {
+      return bufferCache.get(url);
+    }
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    bufferCache.set(url, audioBuffer);
+    return audioBuffer;
+  }
 
   function addTrack(sid){
     if($activeTracks.find(t=>t.soundId===sid))return;
@@ -18,35 +32,87 @@
   }
   function updateTrackVolume(sid,vol){
     activeTracks.update(t=>t.map(tr=>tr.soundId===sid?{...tr,volume:vol}:tr));
-    const r=trackRefs.find(n=>n.id===sid);
-    if(r&&r.audio)r.audio.volume=vol;
-  }
-  function _start(sid,vol){
-    const s=findSound(sid);if(!s||!s.file)return;
-    const a=new Audio(s.file);a.loop=true;a.volume=vol;
-
-    let sourceNode = null;
-    try {
-      const ctx = getAudioContext();
-      sourceNode = ctx.createMediaElementSource(a);
-      sourceNode.connect(getMasterGain());
-    } catch(e) {
-      console.warn("Failed to connect HTML5 Audio to Web Audio API gain node:", e);
+    const ref=trackRefs.find(r=>r.id===sid);
+    if(ref){
+      ref.volume=vol;
+      if(ref.gainNode){
+        const ctx=getAudioContext();
+        try{
+          ref.gainNode.gain.setValueAtTime(ref.gainNode.gain.value,ctx.currentTime);
+          ref.gainNode.gain.linearRampToValueAtTime(vol,ctx.currentTime+0.05);
+        }catch(e){
+          ref.gainNode.gain.value=vol;
+        }
+      }
     }
+  }
+  async function _start(sid,vol){
+    const s=findSound(sid);if(!s||!s.file)return;
+    const ctx=getAudioContext();
+    const existingRef=trackRefs.find(r=>r.id===sid);
+    if(existingRef)return;
 
-    a.play().catch(e=>console.warn(e));
-    trackRefs.push({id:sid,audio:a,sourceNode});
+    const ref={
+      id:sid,
+      sourceNode:null,
+      gainNode:null,
+      volume:vol,
+      loading:true,
+      audioBuffer:null
+    };
+    trackRefs.push(ref);
+    trackRefs=trackRefs;
+
+    try{
+      const buffer=await getAudioBuffer(s.file,ctx);
+      ref.audioBuffer=buffer;
+      ref.loading=false;
+
+      if(!trackRefs.includes(ref))return;
+
+      if($sessionActive && $isPlaying){
+        const source=ctx.createBufferSource();
+        source.buffer=buffer;
+        source.loop=true;
+
+        const gainNode=ctx.createGain();
+        gainNode.gain.setValueAtTime(0,ctx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(vol,ctx.currentTime+0.1);
+
+        source.connect(gainNode);
+        gainNode.connect(getMasterGain());
+
+        source.start(0);
+        ref.sourceNode=source;
+        ref.gainNode=gainNode;
+      }
+    }catch(e){
+      console.error("Failed to load/play sleep sound:",e);
+      trackRefs=trackRefs.filter(r=>r!==ref);
+    }
   }
   function _stop(sid){
     const idx=trackRefs.findIndex(r=>r.id===sid);
     if(idx===-1)return;
-    const r=trackRefs[idx];
-    try{
-      r.audio.pause();
-      r.audio.src='';
-      if(r.sourceNode) r.sourceNode.disconnect();
-    }catch(e){}
+    const ref=trackRefs[idx];
     trackRefs.splice(idx,1);
+    trackRefs=trackRefs;
+
+    const ctx=getAudioContext();
+    const source=ref.sourceNode;
+    const gain=ref.gainNode;
+
+    if(source && gain){
+      try{
+        gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0,ctx.currentTime+0.15);
+      }catch(e){}
+      setTimeout(()=>{
+        try{source.stop();}catch(e){}
+        try{source.disconnect();}catch(e){}
+        try{gain.disconnect();}catch(e){}
+      },160);
+    }
   }
   function startTimer() {
     if (timerInterval) clearInterval(timerInterval);
@@ -67,26 +133,66 @@
   $: if ($sessionActive) {
     if ($isPlaying && !playing) {
       playing = true;
-      trackRefs.forEach(r => {
-        r.audio.play().catch(e => console.warn(e));
+      const ctx = getAudioContext();
+      trackRefs.forEach(ref => {
+        if (!ref.sourceNode && ref.audioBuffer) {
+          const source = ctx.createBufferSource();
+          source.buffer = ref.audioBuffer;
+          source.loop = true;
+
+          const gainNode = ctx.createGain();
+          gainNode.gain.setValueAtTime(0, ctx.currentTime);
+          gainNode.gain.linearRampToValueAtTime(ref.volume, ctx.currentTime + 0.1);
+
+          source.connect(gainNode);
+          gainNode.connect(getMasterGain());
+
+          source.start(0);
+          ref.sourceNode = source;
+          ref.gainNode = gainNode;
+        }
       });
       startTimer();
     } else if (!$isPlaying && playing) {
       playing = false;
-      trackRefs.forEach(r => {
-        r.audio.pause();
+      const ctx = getAudioContext();
+      trackRefs.forEach(ref => {
+        const source = ref.sourceNode;
+        const gain = ref.gainNode;
+        if (source && gain) {
+          try {
+            gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
+          } catch (e) {}
+          ref.sourceNode = null;
+          ref.gainNode = null;
+          setTimeout(() => {
+            try { source.stop(); } catch (e) {}
+            try { source.disconnect(); } catch (e) {}
+            try { gain.disconnect(); } catch (e) {}
+          }, 160);
+        }
       });
       stopTimer();
     }
   }
 
   function stopAll(){
-    trackRefs.forEach(r=>{
-      try{
-        r.audio.pause();
-        r.audio.src='';
-        if(r.sourceNode) r.sourceNode.disconnect();
-      }catch(e){}
+    const ctx = getAudioContext();
+    trackRefs.forEach(ref => {
+      const source = ref.sourceNode;
+      const gain = ref.gainNode;
+      if (source && gain) {
+        try {
+          gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+          gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
+        } catch (e) {}
+        setTimeout(() => {
+          try { source.stop(); } catch (e) {}
+          try { source.disconnect(); } catch (e) {}
+          try { gain.disconnect(); } catch (e) {}
+        }, 160);
+      }
     });
     trackRefs=[];
     playing=false;
@@ -100,13 +206,13 @@
     if($sessionActive){
       stopAll();
     } else {
-      $activeTracks.forEach(t=>_start(t.soundId,t.volume));
       sessionActive.set(true);
       isPlaying.set(true);
       playing=true;
       elapsed=0;
       remainingTime.set($sleepTimer * 60);
       audioProgress.set(0);
+      $activeTracks.forEach(t=>_start(t.soundId,t.volume));
       startTimer();
     }
   }

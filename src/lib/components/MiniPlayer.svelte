@@ -23,7 +23,7 @@
   function handleExpand() {
     // Open Now Playing sheet with a simple info panel
     import('../views/NowPlaying.svelte').then(mod => {
-      sheetContent.set({ component: mod.default, props: {} });
+      sheetContent.set({ component: mod.default, props: {}, height: 65 });
     });
   }
 

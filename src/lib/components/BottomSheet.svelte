@@ -17,7 +17,7 @@
     contentComponent = $sheetContent.component;
     contentProps = $sheetContent.props || {};
     isOpen = true;
-    sheetHeight.set(baseHeight);
+    sheetHeight.set($sheetContent.height || baseHeight);
   }
 
   function handlePointerDown(e) {
