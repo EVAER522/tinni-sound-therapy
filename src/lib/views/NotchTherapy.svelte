@@ -1,10 +1,12 @@
 <script>
   import { matchMethod, matchEar, matchStep, matchTotalSteps, matchResults, matchConfidence, matchPhase, notchParams, sessionTimer, sessionDuration, postFeeling, postSeverity, postNote, tinnitusToday, useVoice, useUpload, uploadedFileName } from "../stores/therapy.js";
-  import { isPlaying, isMicromode, records, currentMode, therapyView, onboardingComplete, sessionActive, activeTab } from "../stores/app.js";
+  import { isPlaying, isMicromode, records, currentMode, therapyView, onboardingComplete, sessionActive, activeTab, locale } from "../stores/app.js";
   import { createMatchingSession, startTherapy, stopTherapy, updateTherapyParams, loadUploadedAudio, clearUploadedAudio, startMic, stopMic } from "../audio/notch.js";
   import { getAudioContext, setMasterVolume, getAnalyserNode, suspendAudio, resumeAudio, isAudioSuspended, getMasterGain } from "../audio/engine.js";
   import { remainingTime, audioProgress } from "../stores/audio.js";
   import { t } from "../stores/locale.js";
+  import { tick } from "svelte";
+
   let session,currentFreqA=0,currentFreqB=0,matchingComplete=false,matchFreqResult=null,sessionInterval=null,sessionElapsed=0,selectedCarrier="white",uploadError="",micLoading=false,fileInputEl,useNoise=false,manualFreq=4000,manualPlaying=false,manualOsc=null,manualGainNode=null,manualFineMode=false,manualFineCenter=4000,spectrumAnimFrame=null;
   const bandwidths=[{id:"narrow",label:"Narrow (1/3 oct)"},{id:"medium",label:"Medium (1/2 oct)"},{id:"wide",label:"Wide (1 oct)"}];
   const depths=[{id:-3,label:"-3 dB"},{id:-6,label:"-6 dB"},{id:-12,label:"-12 dB"},{id:-20,label:"-20 dB"}];
@@ -152,7 +154,39 @@
       playSingleTone(manualFreq);
     }
   }
-  let paused=false;
+
+  function getBandLabel(f, lang) {
+    if (lang === 'zh') {
+      if (f < 250) return '低音 (Bass)';
+      if (f < 500) return '中低音 (Low-Mid)';
+      if (f < 2000) return '中音 (Mid)';
+      if (f < 4000) return '中高音 (Mid-High)';
+      if (f < 6000) return '存在感频段 (Presence)';
+      return '极高音 (Brilliance)';
+    } else {
+      if (f < 250) return 'Bass';
+      if (f < 500) return 'Low-Mid';
+      if (f < 2000) return 'Mid';
+      if (f < 4000) return 'Mid-High';
+      if (f < 6000) return 'Presence';
+      return 'Brilliance';
+    }
+  }
+
+  $: sliderMin = manualFineMode ? Math.max(20, manualFineCenter - 100) : 125;
+  $: sliderMax = manualFineMode ? Math.min(16000, manualFineCenter + 100) : 12000;
+  $: sliderProgressPct = manualFineMode 
+    ? Math.max(0, Math.min(100, ((manualFreq - sliderMin) / (sliderMax - sliderMin)) * 100))
+    : freqToLogPct(manualFreq, 125, 12000);
+
+  function adjustFreq(amount) {
+    manualFreq = Math.max(20, Math.min(16000, manualFreq + amount));
+    if (manualPlaying) {
+      playTestTone(manualFreq);
+    }
+  }
+
+  $: paused = $sessionActive && !$isPlaying;
   function startTimer(){
     if(sessionInterval)clearInterval(sessionInterval);
     sessionInterval=setInterval(()=>{
@@ -170,22 +204,77 @@
     }
   }
   $: if ($sessionActive) {
-    if ($isPlaying && paused) {
+    if ($isPlaying) {
       resumeAudio();
-      paused=false;
       startTimer();
-    } else if (!$isPlaying && !paused) {
+      startSpectrum();
+    } else {
       suspendAudio();
-      paused=true;
       stopTimer();
+      stopSpectrum();
     }
   }
-  function startSession(){const f=$notchParams.left.frequency||4000;startTherapy(f,$notchParams.left.bandwidth,$notchParams.left.depth,selectedCarrier,{useVoice:$useVoice,useUpload:$useUpload});sessionActive.set(true);isPlaying.set(true);paused=false;sessionElapsed=0;sessionTimer.set(0);setTimeout(()=>startSpectrum(),100);startTimer();}
+  function startSession(){
+    const f=$notchParams.left.frequency||4000;
+    startTherapy(f,$notchParams.left.bandwidth,$notchParams.left.depth,selectedCarrier,{useVoice:$useVoice,useUpload:$useUpload});
+    sessionElapsed=0;
+    sessionTimer.set(0);
+    sessionActive.set(true);
+    isPlaying.set(true);
+  }
   function stopSession(b){stopSpectrum();stopTherapy();sessionActive.set(false);isPlaying.set(false);remainingTime.set(0);audioProgress.set(0);stopTimer();matchPhase.set("result");}
-  function emergencyStop(){stopSpectrum();stopTherapy();sessionActive.set(false);isPlaying.set(false);paused=false;remainingTime.set(0);audioProgress.set(0);stopTimer();therapyView.set("match");}
+  function emergencyStop(){stopSpectrum();stopTherapy();sessionActive.set(false);isPlaying.set(false);remainingTime.set(0);audioProgress.set(0);stopTimer();therapyView.set("match");}
   function togglePause(){isPlaying.update(v=>!v);}
-  function startSpectrum(){stopSpectrum();const c=document.getElementById("spectrum-canvas");if(!c)return;const c2d=c.getContext("2d");const a=getAnalyserNode();const bl=a.frequencyBinCount;const d=new Uint8Array(bl);const w=c.width,h=c.height;function draw(){spectrumAnimFrame=requestAnimationFrame(draw);a.getByteFrequencyData(d);c2d.clearRect(0,0,w,h);const bw=w/bl;for(let i=0;i<bl;i++){const bh=(d[i]/255)*h;const o=0.3+(d[i]/255)*0.7;c2d.fillStyle="rgba(0,102,204,"+o+")";c2d.fillRect(i*bw,h-bh,Math.max(bw-0.5,1),bh);}if($notchParams.left.frequency){const sr=getAudioContext().sampleRate;const x=($notchParams.left.frequency/(sr/2))*w;c2d.strokeStyle="rgba(41,151,255,0.8)";c2d.lineWidth=2;c2d.beginPath();c2d.moveTo(x,0);c2d.lineTo(x,h);c2d.stroke();c2d.fillStyle="rgba(41,151,255,0.9)";c2d.font="11px Inter, sans-serif";c2d.fillText(Math.round($notchParams.left.frequency)+" Hz",x+4,14);}}draw();}
-  function stopSpectrum(){if(spectrumAnimFrame){cancelAnimationFrame(spectrumAnimFrame);spectrumAnimFrame=null;}}
+  
+  let isDrawing = false;
+  async function startSpectrum(){
+    stopSpectrum();
+    isDrawing = true;
+    await tick();
+    if (!isDrawing) return;
+    const c=document.getElementById("spectrum-canvas");
+    if(!c)return;
+    const c2d=c.getContext("2d");
+    const a=getAnalyserNode();
+    if(!a)return;
+    const bl=a.frequencyBinCount;
+    const d=new Uint8Array(bl);
+    const w=c.width,h=c.height;
+    const sr=getAudioContext().sampleRate;
+    function draw(){
+      if(!isDrawing)return;
+      spectrumAnimFrame=requestAnimationFrame(draw);
+      a.getByteFrequencyData(d);
+      c2d.clearRect(0,0,w,h);
+      const bw=w/bl;
+      for(let i=0;i<bl;i++){
+        const bh=(d[i]/255)*h;
+        const o=0.3+(d[i]/255)*0.7;
+        c2d.fillStyle="rgba(0,102,204,"+o+")";
+        c2d.fillRect(i*bw,h-bh,Math.max(bw-0.5,1),bh);
+      }
+      if($notchParams.left.frequency){
+        const x=($notchParams.left.frequency/(sr/2))*w;
+        c2d.strokeStyle="rgba(41,151,255,0.8)";
+        c2d.lineWidth=2;
+        c2d.beginPath();
+        c2d.moveTo(x,0);
+        c2d.lineTo(x,h);
+        c2d.stroke();
+        c2d.fillStyle="rgba(41,151,255,0.9)";
+        c2d.font="11px Inter, sans-serif";
+        c2d.fillText(Math.round($notchParams.left.frequency)+" Hz",x+4,14);
+      }
+    }
+    spectrumAnimFrame=requestAnimationFrame(draw);
+  }
+  function stopSpectrum(){
+    isDrawing = false;
+    if(spectrumAnimFrame){
+      cancelAnimationFrame(spectrumAnimFrame);
+      spectrumAnimFrame=null;
+    }
+  }
   function submitRating(){const r={date:new Date().toISOString().split("T")[0],time:new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}),mode:"therapy",duration_min:Math.round(sessionElapsed/60),frequency:$notchParams.left.frequency,bandwidth:$notchParams.left.bandwidth,depth:$notchParams.left.depth,feeling:$postFeeling,severity_before:$postSeverity,note:$postNote||""};records.update(rs=>[...rs,r]);postFeeling.set(null);postSeverity.set(5);postNote.set("");therapyView.set("match");matchPhase.set("method-select");}
   import { onDestroy } from "svelte";onDestroy(()=>{stopSpectrum();stopTimer();stopTestTone();stopTherapy();});
 </script>
@@ -194,12 +283,253 @@
 {:else if $matchPhase==="method-select"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_select_method}</h2><p class="desc">{$t.notch_method_desc}</p><div class="method-grid"><button class="method-card" onclick={()=>selectMethod("2afc")}><div class="method-name">{$t.notch_adaptive}</div><div class="method-desc">{$t.notch_adaptive_desc}</div></button><button class="method-card" onclick={()=>selectMethod("manual")}><div class="method-name">{$t.notch_manual}</div><div class="method-desc">{$t.notch_manual_desc}</div></button></div></div>
   {:else if $matchPhase==="ear-select"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_select_ear}</h2><p class="desc">{$t.notch_ear_desc}</p><div class="ear-grid">{#each ["left","right","both"] as ear}<button class="ear-card" onclick={()=>selectEar(ear)}><div class="ear-name">{ear==="left"?$t.notch_left:ear==="right"?$t.notch_right:$t.notch_both}</div></button>{/each}</div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
 {:else if $matchPhase==="matching"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_freq_matching}</h2><div class="progress-info"><span class="text-body">{$t.notch_round} {$matchStep}/{$matchTotalSteps}<span class="phase-badge">{session?.phase==="coarse"?$t.notch_coarse:$t.notch_fine}</span></span><div class="progress-bar-compact"><div class="progress-fill-compact" style="width:{Math.min($matchStep/$matchTotalSteps*100,100)}%"></div></div></div><p class="desc">{$t.notch_which_sound}</p><div class="afc-grid"><button class="afc-btn" onclick={()=>chooseFreq(currentFreqA)}><span class="afc-label">{$t.notch_sound_a}</span><span class="afc-freq">{Math.round(currentFreqA)} Hz</span></button><button class="afc-btn" onclick={()=>chooseFreq(currentFreqB)}><span class="afc-label">{$t.notch_sound_b}</span><span class="afc-freq">{Math.round(currentFreqB)} Hz</span></button></div><div class="replay-row"><button class="btn-secondary replay-btn" onclick={()=>playSingleTone(currentFreqA)}>{$t.notch_sound_a}</button><button class="btn-secondary replay-btn" onclick={()=>playSingleTone(currentFreqB)}>{$t.notch_sound_b}</button></div><div class="matching-tools"><button class="glass-chip" class:selected={useNoise} onclick={()=>useNoise=!useNoise}>{useNoise?$t.notch_narrowband:$t.notch_pure_tone}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
-  {:else if $matchPhase==="manual-match"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_manual_title}</h2><p class="desc">{manualFineMode?$t.notch_manual_desc_fine:$t.notch_manual_desc_coarse}</p><div class="manual-controls"><div class="slider-with-ticks">{#if manualFineMode}<input type="range" min={Math.max(20,manualFineCenter-100)} max={Math.min(16000,manualFineCenter+100)} step="1" bind:value={manualFreq} class="freq-slider" oninput={()=>{if(manualPlaying)playTestTone(manualFreq);}} onmousedown={()=>playTestTone(manualFreq)} onmouseup={stopTestTone} />{:else}<input type="range" min="0" max="100" step="0.01" value={freqToLogPct(manualFreq,125,12000)} class="freq-slider" oninput={(e)=>{manualFreq=logPctToFreq(parseFloat(e.target.value),125,12000);if(manualPlaying)playTestTone(manualFreq);}} onmousedown={()=>playTestTone(manualFreq)} onmouseup={stopTestTone} />{/if}<div class="tick-marks">{#if manualFineMode}{#each Array(21) as _,i}{@const thz=manualFineCenter-100+i*10}{@const fl=manualFineCenter-100}{@const fh=manualFineCenter+100}{@const pct=((thz-fl)/(fh-fl))*100}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{:else}{#each [125,250,500,1000,2000,4000,6000,8000,12000] as thz}{@const pct=freqToLogPct(thz,125,12000)}<span class="tick" style="left:{pct}%"><span class="tick-line"></span><span class="tick-label">{thz}</span></span>{/each}{/if}</div></div><div class="freq-display"><input type="number" min="20" max="16000" bind:value={manualFreq} class="freq-input" onchange={handleDirectFreqInput} /><span class="text-body">Hz</span></div><div class="manual-actions"><button class="glass-btn-primary" onclick={confirmManual}>{$t.notch_confirm}</button><button class="glass-btn-secondary" onclick={()=>playTestTone(manualFreq)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={stopTestTone}>{$t.notch_stop}</button><button class="glass-btn-secondary" onclick={toggleManualFine}>{manualFineMode?$t.notch_back_coarse:$t.notch_fine_tune}</button></div></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
+  {:else if $matchPhase==="manual-match"}
+  <div class="view-panel fade-in">
+    <h2 class="title">{$t.notch_manual_title}</h2>
+    <p class="desc">{manualFineMode ? $t.notch_manual_desc_fine : $t.notch_manual_desc_coarse}</p>
+    
+    <div class="manual-controls">
+      <!-- Frequency Card Dashboard -->
+      <div class="freq-card">
+        <button class="freq-step-btn" onclick={() => adjustFreq(manualFineMode ? -1 : -50)} aria-label="Decrease frequency">-</button>
+        <div class="freq-card-info">
+          <div class="freq-card-value-wrapper">
+            <input 
+              type="number" 
+              min="20" 
+              max="16000" 
+              bind:value={manualFreq} 
+              class="freq-card-input" 
+              onchange={handleDirectFreqInput} 
+            />
+            <span class="freq-card-unit">Hz</span>
+          </div>
+          <div class="freq-card-band">{getBandLabel(manualFreq, $locale)}</div>
+        </div>
+        <button class="freq-step-btn" onclick={() => adjustFreq(manualFineMode ? 1 : 50)} aria-label="Increase frequency">+</button>
+      </div>
+
+      <!-- Glowing Slider with Ticks -->
+      <div class="slider-with-ticks">
+        <div class="slider-container">
+          <div class="slider-track-bg"></div>
+          <div class="slider-progress-fill" style="width: {sliderProgressPct}%"></div>
+          {#if manualFineMode}
+            <input 
+              type="range" 
+              min={sliderMin} 
+              max={sliderMax} 
+              step="1" 
+              bind:value={manualFreq} 
+              class="manual-freq-slider" 
+              oninput={() => { if (manualPlaying) playTestTone(manualFreq); }} 
+              onmousedown={() => playTestTone(manualFreq)} 
+              onmouseup={stopTestTone} 
+            />
+          {:else}
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              step="0.01" 
+              value={freqToLogPct(manualFreq, 125, 12000)} 
+              class="manual-freq-slider" 
+              oninput={(e) => { 
+                manualFreq = logPctToFreq(parseFloat(e.target.value), 125, 12000); 
+                if (manualPlaying) playTestTone(manualFreq); 
+              }} 
+              onmousedown={() => playTestTone(manualFreq)} 
+              onmouseup={stopTestTone} 
+            />
+          {/if}
+        </div>
+
+        <div class="tick-marks">
+          {#if manualFineMode}
+            {#each Array(21) as _, i}
+              {@const thz = manualFineCenter - 100 + i * 10}
+              {#if thz >= 20 && thz <= 16000}
+                {@const fl = manualFineCenter - 100}
+                {@const fh = manualFineCenter + 100}
+                {@const pct = ((thz - fl) / (fh - fl)) * 100}
+                {@const isMajor = i % 5 === 0}
+                <span class="tick" class:major={isMajor} style="left: {pct}%">
+                  <span class="tick-line"></span>
+                  {#if isMajor}
+                    <span class="tick-label">{thz}</span>
+                  {/if}
+                </span>
+              {/if}
+            {/each}
+          {:else}
+            {#each [125, 250, 500, 1000, 2000, 4000, 6000, 8000, 12000] as thz}
+              {@const pct = freqToLogPct(thz, 125, 12000)}
+              {@const hasLabel = thz !== 250 && thz !== 500}
+              {@const labelText = thz >= 1000 ? (thz / 1000) + 'k' : thz}
+              <span class="tick" class:major={hasLabel} style="left: {pct}%">
+                <span class="tick-line"></span>
+                {#if hasLabel}
+                  <span class="tick-label">{labelText}</span>
+                {/if}
+              </span>
+            {/each}
+          {/if}
+        </div>
+      </div>
+
+      <!-- Manual Match Actions -->
+      <div class="manual-actions">
+        <button class="glass-btn-primary" onclick={confirmManual}>{$t.notch_confirm}</button>
+        <button class="glass-btn-secondary" onclick={() => playTestTone(manualFreq)}>{$t.notch_preview}</button>
+        <button class="glass-btn-secondary" onclick={stopTestTone}>{$t.notch_stop}</button>
+        <button class="glass-btn-secondary" onclick={toggleManualFine}>
+          {manualFineMode ? $t.notch_back_coarse : $t.notch_fine_tune}
+        </button>
+      </div>
+    </div>
+    
+    <button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button>
+  </div>
 {:else if $matchPhase==="verification"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_verify_title}</h2><p class="desc">{$t.notch_verify_desc} <strong>{Math.round($notchParams.left.frequency)} Hz</strong></p><div class="verification-actions"><button class="glass-btn-primary" onclick={verifyAccept}>{$t.notch_confirm_start}</button><button class="glass-btn-secondary" onclick={()=>playTestTone($notchParams.left.frequency)}>{$t.notch_preview}</button><button class="glass-btn-secondary" onclick={verifyRetune}>{$t.notch_rematch}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
-  {:else if $matchPhase==="complete"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_complete_title}</h2><div class="match-report"><div class="report-item"><span class="text-caption">{$t.notch_frequency}</span><span class="text-display-md">{Math.round($notchParams.left.frequency)} Hz</span></div><div class="report-item"><span class="text-caption">{$t.notch_confidence}</span><div class="confidence-dots">{#each Array(5) as _,i}<span class="conf-dot" class:filled={i<$matchConfidence}></span>{/each}</div></div></div><div class="session-controls"><div class="control-row"><label class="text-caption-strong">{$t.notch_carrier}</label><div class="chip-group" role="radiogroup">{#each ["white","pink","ambient"] as c}<button class="glass-chip" class:selected={selectedCarrier===c} onclick={()=>selectedCarrier=c}>{c==="white"?$t.notch_white_noise:c==="pink"?$t.notch_pink_noise:$t.notch_ambient}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_upload_audio}</label><div class="chip-group"><input type="file" accept="audio/*" bind:this={fileInputEl} onchange={handleUpload} style="display:none" /><button class="glass-chip" onclick={()=>fileInputEl?.click()}>{$t.notch_select_file}</button>{#if $useUpload}<button class="glass-chip" onclick={clearUpload}>{$t.notch_clear}</button>{/if}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_mic}</label><div class="chip-group" role="radiogroup"><button class="glass-chip" class:selected={$useVoice} onclick={toggleVoice} disabled={micLoading}>{micLoading?$t.notch_requesting:$useVoice?$t.notch_mic_on:$t.notch_enable_mic}</button></div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_bandwidth}</label><div class="chip-group" role="radiogroup">{#each bandwidths as bw}<button class="glass-chip" class:selected={$notchParams.left.bandwidth===bw.id} onclick={()=>notchParams.update(p=>{p.left.bandwidth=bw.id;return p;})}>{bw.label}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_depth}</label><div class="chip-group" role="radiogroup">{#each depths as d}<button class="glass-chip" class:selected={$notchParams.left.depth===d.id} onclick={()=>notchParams.update(p=>{p.left.depth=d.id;return p;})}>{d.label}</button>{/each}</div></div><div class="control-row"><label class="text-caption-strong">{$t.notch_duration}</label><div class="chip-group" role="radiogroup">{#each [15,30,45,60] as dur}<button class="glass-chip" class:selected={$sessionDuration===dur} onclick={()=>sessionDuration.set(dur)}>{dur} {$t.notch_min}</button>{/each}</div></div><button class="glass-btn-hero start-btn" onclick={startSession}>{$t.notch_start_therapy}</button><button class="glass-btn-secondary" onclick={()=>therapyView.set("match")}>{$t.notch_skip_today}</button></div><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button></div>
+  {:else if $matchPhase==="complete"}
+  <div class="view-panel fade-in">
+    <h2 class="title">{$t.notch_complete_title}</h2>
+    <div class="match-report">
+      <div class="report-item">
+        <span class="text-caption">{$t.notch_frequency}</span>
+        <span class="text-display-md">{Math.round($notchParams.left.frequency)} Hz</span>
+      </div>
+      <div class="report-item">
+        <span class="text-caption">{$t.notch_confidence}</span>
+        <div class="confidence-dots">{#each Array(5) as _,i}<span class="conf-dot" class:filled={i<$matchConfidence}></span>{/each}</div>
+      </div>
+    </div>
+    <div class="session-controls">
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_carrier}</label>
+        <div class="chip-group" role="radiogroup">
+          {#each ["white","pink","ambient"] as c}
+            <button class="glass-chip" class:selected={selectedCarrier===c} onclick={()=>selectedCarrier=c}>{c==="white"?$t.notch_white_noise:c==="pink"?$t.notch_pink_noise:$t.notch_ambient}</button>
+          {/each}
+        </div>
+      </div>
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_upload_audio}</label>
+        <div class="chip-group">
+          <input type="file" accept="audio/*" bind:this={fileInputEl} onchange={handleUpload} style="display:none" />
+          <button class="glass-chip" onclick={()=>fileInputEl?.click()}>{$t.notch_select_file}</button>
+          {#if $useUpload}<button class="glass-chip" onclick={clearUpload}>{$t.notch_clear}</button>{/if}
+        </div>
+      </div>
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_mic}</label>
+        <div class="chip-group" role="radiogroup">
+          <button class="glass-chip" class:selected={$useVoice} onclick={toggleVoice} disabled={micLoading}>{micLoading?$t.notch_requesting:$useVoice?$t.notch_mic_on:$t.notch_enable_mic}</button>
+        </div>
+      </div>
+
+      <!-- Bandwidth selector with contextual hint -->
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_bandwidth}</label>
+        <div class="chip-group" role="radiogroup">
+          {#each bandwidths as bw}
+            <button class="glass-chip" class:selected={$notchParams.left.bandwidth===bw.id} onclick={()=>notchParams.update(p=>{p.left.bandwidth=bw.id;return p;})}>{bw.label}</button>
+          {/each}
+        </div>
+        <div class="param-hint">
+          {#if $notchParams.left.bandwidth==="narrow"}{$t.notch_bandwidth_narrow_hint}
+          {:else if $notchParams.left.bandwidth==="medium"}{$t.notch_bandwidth_medium_hint}
+          {:else if $notchParams.left.bandwidth==="wide"}{$t.notch_bandwidth_wide_hint}
+          {/if}
+        </div>
+      </div>
+
+      <!-- Depth selector with contextual hint -->
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_depth}</label>
+        <div class="chip-group" role="radiogroup">
+          {#each depths as d}
+            <button class="glass-chip" class:selected={$notchParams.left.depth===d.id} onclick={()=>notchParams.update(p=>{p.left.depth=d.id;return p;})}>{d.label}</button>
+          {/each}
+        </div>
+        <div class="param-hint">
+          {#if $notchParams.left.depth===-20}{$t.notch_depth_20_hint}
+          {:else if $notchParams.left.depth===-12}{$t.notch_depth_12_hint}
+          {:else if $notchParams.left.depth===-6}{$t.notch_depth_6_hint}
+          {:else if $notchParams.left.depth===-3}{$t.notch_depth_3_hint}
+          {/if}
+        </div>
+      </div>
+
+      <div class="control-row">
+        <label class="text-caption-strong">{$t.notch_duration}</label>
+        <div class="chip-group" role="radiogroup">
+          {#each [15,30,45,60] as dur}
+            <button class="glass-chip" class:selected={$sessionDuration===dur} onclick={()=>sessionDuration.set(dur)}>{dur} {$t.notch_min}</button>
+          {/each}
+        </div>
+      </div>
+      <button class="glass-btn-hero start-btn" onclick={startSession}>{$t.notch_start_therapy}</button>
+      <button class="glass-btn-secondary" onclick={()=>therapyView.set("match")}>{$t.notch_skip_today}</button>
+    </div>
+    <button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button>
+  </div>
   {:else if $matchPhase==="result"}<div class="view-panel fade-in"><h2 class="title">{$t.notch_session_complete}</h2><p class="desc">{$t.notch_how_feel}</p><div class="feeling-grid">{#each [{id:"better",label:$t.notch_better},{id:"unchanged",label:$t.notch_no_change},{id:"worse",label:$t.notch_worse}] as f}<button class="feeling-btn" class:selected={$postFeeling===f.id} onclick={()=>postFeeling.set(f.id)}>{f.label}</button>{/each}</div><div class="severity-slider"><label class="text-caption-strong" for="notch-severity">{$t.notch_current_level}</label><div class="slider-row"><span class="text-fine">0 {$t.notch_quiet}</span><input type="range" id="notch-severity" min="0" max="10" step="1" bind:value={$postSeverity} class="freq-slider" /><span class="text-fine">10 {$t.notch_loud}</span></div><span class="text-display-md severity-value">{$postSeverity}</span></div><div class="note-section"><label class="text-caption-strong" for="notch-notes">{$t.notch_notes}</label><textarea id="notch-notes" bind:value={$postNote} class="note-input" placeholder={$t.notch_notes_placeholder} rows="3"></textarea></div><button class="glass-btn-hero start-btn" onclick={submitRating} disabled={!$postFeeling}>{$t.notch_save_record}</button><button class="glass-btn-secondary" onclick={()=>matchPhase.set("method-select")}>{$t.notch_repeat}</button><button class="back-step" onclick={goBack}>&larr; {$t.notch_back}</button><div class="privacy-note text-fine">{$t.notch_privacy}</div></div>
 {/if}</div>
-{#if $isPlaying || paused}<div class="session-overlay" class:micromode={$isMicromode}><button class="btn-utility emergency-btn" onclick={togglePause}>{paused?$t.notch_resume:$t.notch_pause}</button><button class="btn-utility emergency-btn" onclick={emergencyStop}>{$t.notch_stop_esc}</button><div class="session-info"><span class="text-tagline session-title">{$t.notch_in_session}</span><span class="text-lead">{Math.floor(sessionElapsed/60)}:{String(sessionElapsed%60).padStart(2,"0")}</span></div><div class="spectrum-container"><div class="spectrum-header"><span class="spectrum-label">{$t.notch_real_time_spec}</span><span class="spectrum-hint">{$t.notch_notch_hint}</span></div><canvas id="spectrum-canvas" width="480" height="160"></canvas></div></div>{/if}
+{#if $isPlaying || paused}
+<div class="session-overlay" class:micromode={$isMicromode} class:paused-state={paused}>
+
+  <!-- Top controls row -->
+  <div class="overlay-controls">
+    <button class="overlay-btn" class:btn-resume={paused} onclick={togglePause}>
+      {#if paused}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        {$t.notch_resume}
+      {:else}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        {$t.notch_pause}
+      {/if}
+    </button>
+    <button class="overlay-btn btn-stop" onclick={emergencyStop}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+      {$t.notch_stop_esc}
+    </button>
+  </div>
+
+  <!-- Timer display -->
+  <div class="session-info">
+    <span class="session-status">{paused ? '⏸ '+$t.notch_pause : $t.notch_in_session}</span>
+    <span class="session-timer">{Math.floor(sessionElapsed/60)}:{String(sessionElapsed%60).padStart(2,"0")}</span>
+    <span class="session-remaining">{Math.max(0,Math.floor(($sessionDuration*60-sessionElapsed)/60))}:{String(Math.max(0,($sessionDuration*60-sessionElapsed)%60)).padStart(2,"0")} left</span>
+  </div>
+
+  <!-- Session parameter pills -->
+  <div class="session-params">
+    <div class="param-pill">
+      <span class="param-pill-label">{$t.notch_frequency}</span>
+      <span class="param-pill-value">{Math.round($notchParams.left.frequency)} Hz</span>
+    </div>
+    <div class="param-pill">
+      <span class="param-pill-label">{$t.notch_bandwidth}</span>
+      <span class="param-pill-value">{$notchParams.left.bandwidth === 'narrow' ? '1/3 oct' : $notchParams.left.bandwidth === 'medium' ? '1/2 oct' : '1 oct'}</span>
+    </div>
+    <div class="param-pill">
+      <span class="param-pill-label">{$t.notch_depth}</span>
+      <span class="param-pill-value">{$notchParams.left.depth} dB</span>
+    </div>
+  </div>
+
+  <!-- Real-time spectrum -->
+  <div class="spectrum-container">
+    <div class="spectrum-header">
+      <span class="spectrum-label">{$t.notch_real_time_spec}</span>
+      <span class="spectrum-hint">{$t.notch_notch_hint}</span>
+    </div>
+    <canvas id="spectrum-canvas" width="480" height="140"></canvas>
+  </div>
+
+</div>
+{/if}
 <style>
 .nt-view{flex:1;overflow-y:auto;padding:var(--space-section)var(--space-lg);display:flex;flex-direction:column;align-items:center;scrollbar-width:thin;}
 .view-panel{max-width:600px;width:100%;display:flex;flex-direction:column;gap:var(--space-lg);align-items:center;text-align:center;}
@@ -222,14 +552,12 @@
 .replay-row,.matching-tools{display:flex;gap:var(--space-sm);}
 .freq-slider{width:100%;max-width:400px;height:6px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,0.15);border-radius:3px;outline:none;}
 .freq-slider::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;border-radius:50%;background:var(--accent-blue-purple);cursor:pointer;border:3px solid var(--glass-bg-heavy);box-shadow:0 1px 4px rgba(0,0,0,.3);}
-.freq-input{width:120px;padding:8px 12px;background:var(--glass-bg-light);border:1px solid var(--glass-border);border-radius:12px;text-align:center;font-size:24px;font-weight:600;color:var(--text-primary);font-family:inherit;}
-.freq-input:focus{outline:2px solid rgba(108,92,231,0.6);outline-offset:-1px;}
 .manual-controls{width:100%;display:flex;flex-direction:column;align-items:center;gap:var(--space-lg);padding:var(--space-lg)0;}
 .slider-with-ticks{width:100%;max-width:400px;display:flex;flex-direction:column;gap:4px;}
 .tick-marks{position:relative;width:100%;height:28px;margin-top:2px;}
 .tick{position:absolute;top:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:2px;}
-.tick-line{width:1px;height:6px;background:rgba(255,255,255,0.2);}
-.tick-label{font-size:9px;color:var(--text-tertiary);white-space:nowrap;}
+.tick-line{width:1px;height:6px;background:rgba(255,255,255,0.2);transition:background 0.2s;}
+.tick-label{font-size:9px;color:var(--text-tertiary);white-space:nowrap;transition:color 0.2s;}
 .match-report{display:flex;gap:var(--space-xl);align-items:flex-start;}
 .conf-dot{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,0.15);transition:background .2s;}
 .conf-dot.filled{background:var(--accent-blue-purple);}
@@ -249,10 +577,6 @@
 .dots{display:flex;gap:var(--space-xs);}
 .dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.15);transition:background .2s;}
 .dot.active{background:var(--accent-blue-purple);}
-.session-overlay{position:fixed;bottom:calc(var(--tabbar-height) + var(--safe-bottom) + 70px);left:12px;right:12px;top:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-lg);z-index:20;background:rgba(0,0,0,0.6);border-radius:20px;padding:var(--space-lg);}
-.session-info{text-align:center;}
-.session-info :global(.text-lead){font-size:48px;font-weight:700;color:#fff;background:var(--glass-bg-light);padding:8px 24px;border-radius:14px;backdrop-filter:blur(20px);}
-.emergency-btn{font-size:14px;padding:8px 20px;background:var(--glass-bg-light);color:rgba(255,255,255,.7);border:1px solid var(--glass-border);border-radius:12px;}
 .spectrum-container{width:100%;max-width:520px;display:flex;flex-direction:column;gap:6px;align-items:center;}
 .spectrum-header{width:100%;display:flex;justify-content:space-between;align-items:center;padding:0 4px;}
 .spectrum-label{font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:1px;text-transform:uppercase;}
@@ -261,9 +585,283 @@
 .back-step{font-size:14px;font-weight:500;color:var(--text-secondary);background:none;border:none;cursor:pointer;padding:4px 0;margin-top:4px;transition:color .15s;}
 .back-step:hover{color:var(--text-primary);}
 .privacy-note{color:var(--text-tertiary);text-align:center;margin-top:var(--space-md);}
-.freq-display{display:flex;align-items:center;gap:var(--space-xs);}
 .manual-actions,.verification-actions{display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;}
 .session-controls{width:100%;display:flex;flex-direction:column;gap:var(--space-md);align-items:center;}
 .feeling-grid{display:flex;gap:var(--space-md);}
+
+/* Premium Frequency Dashboard Card */
+.freq-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--glass-bg-medium);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: var(--glass-shadow);
+  margin-bottom: var(--space-md);
+  box-sizing: border-box;
+}
+.freq-step-btn {
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.1s;
+}
+.freq-step-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.freq-step-btn:active {
+  transform: scale(0.95);
+}
+.freq-card-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.freq-card-value-wrapper {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+}
+.freq-card-input {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 36px;
+  font-weight: 700;
+  text-align: center;
+  width: 130px;
+  font-family: inherit;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.freq-card-input::-webkit-outer-spin-button,
+.freq-card-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.freq-card-unit {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+.freq-card-band {
+  font-size: 11px;
+  font-weight: 600;
+  color: #a29bfe;
+  background: rgba(108, 92, 231, 0.15);
+  padding: 2px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+/* Premium Slider styling */
+.slider-container {
+  position: relative;
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+}
+.slider-track-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.slider-progress-fill {
+  position: absolute;
+  left: 0;
+  height: 6px;
+  background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+  border-radius: 3px;
+  pointer-events: none;
+  box-shadow: 0 0 10px rgba(108, 92, 231, 0.4);
+}
+.manual-freq-slider {
+  position: absolute;
+  width: 100%;
+  height: 24px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  outline: none;
+  margin: 0;
+}
+.manual-freq-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #6c5ce7;
+  box-shadow: 0 0 10px rgba(108, 92, 231, 0.8), 0 2px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.manual-freq-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+.tick.major .tick-line {
+  height: 10px;
+  background: rgba(255, 255, 255, 0.4);
+}
+.tick.major .tick-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Contextual param hint text */
+.param-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 8px 12px;
+  max-width: 420px;
+  text-align: left;
+  margin-top: 4px;
+  transition: opacity 0.2s;
+}
+
+/* Redesigned session overlay */
+.session-overlay {
+  position: fixed;
+  bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 8px);
+  left: 10px;
+  right: 10px;
+  top: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  z-index: 20;
+  background: rgba(4, 4, 20, 0.82);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 20px 16px 16px;
+}
+.session-overlay.paused-state {
+  background: rgba(20, 10, 40, 0.88);
+  border-color: rgba(162, 155, 254, 0.25);
+}
+.overlay-controls {
+  display: flex;
+  gap: 10px;
+}
+.overlay-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.overlay-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+.overlay-btn.btn-resume {
+  background: rgba(108, 92, 231, 0.35);
+  border-color: rgba(162, 155, 254, 0.5);
+  color: #a29bfe;
+}
+.overlay-btn.btn-resume:hover {
+  background: rgba(108, 92, 231, 0.55);
+  color: #fff;
+}
+.overlay-btn.btn-stop {
+  border-color: rgba(255, 80, 80, 0.3);
+  color: rgba(255, 140, 140, 0.85);
+}
+.overlay-btn.btn-stop:hover {
+  background: rgba(255, 60, 60, 0.2);
+  color: #ff8a8a;
+}
+.session-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.session-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: #a29bfe;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.session-timer {
+  font-size: 52px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -2px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.session-remaining {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.3px;
+}
+.session-params {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.param-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 6px 14px;
+}
+.param-pill-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.param-pill-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: #a29bfe;
+}
 </style>
 
