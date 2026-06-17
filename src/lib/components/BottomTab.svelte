@@ -1,4 +1,4 @@
-﻿<script>
+<script>
   import { activeTab } from '../stores/app.js';
   import { t } from '../stores/locale.js';
 
@@ -33,12 +33,14 @@
 
 <style>
   .bottom-tab { position: fixed; bottom: 0; left: 0; right: 0; height: calc(var(--tabbar-height) + var(--safe-bottom)); padding-bottom: var(--safe-bottom); display: flex; background: var(--glass-bg-light); backdrop-filter: blur(20px) saturate(1.8); -webkit-backdrop-filter: blur(20px) saturate(1.8); border-top: none; z-index: 50; will-change: transform; transform: translateZ(0); }
-  .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 6px 0; background: none; border: none; cursor: pointer; color: rgba(255,255,255,0.5); transition: color 0.2s, transform 0.15s var(--spring-snappy); }
-  .tab-item:hover { color: rgba(255,255,255,0.8); }
-  .tab-item:active { transform: scale(0.93); }
+  .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 6px 0; background: none; border: none; cursor: pointer; color: rgba(255,255,255,0.45); transition: color 0.22s var(--spring-smooth), transform 0.18s var(--spring-bounce); position: relative; -webkit-tap-highlight-color: transparent; }
+  .tab-item::after { content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%) scaleX(0); width: 18px; height: 3px; border-radius: 2px; background: var(--accent-blue-purple); transition: transform 0.28s var(--spring-bounce), opacity 0.22s; opacity: 0; }
+  .tab-item:hover { color: rgba(255,255,255,0.75); transform: translateY(-1px); }
+  .tab-item:active { transform: scale(0.9) !important; transition-duration: 80ms !important; }
   .tab-item.active { color: #fff; }
-  .tab-item.active .tab-icon { transform: translateY(-2px); }
-  .tab-item.active .tab-icon :global(svg) { filter: drop-shadow(0 0 6px rgba(108,92,231,0.6)); }
-  .tab-icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; transition: transform 0.2s var(--spring-snappy); }
-  .tab-label { font-size: 10px; font-weight: 500; letter-spacing: -0.02em; }
+  .tab-item.active::after { transform: translateX(-50%) scaleX(1); opacity: 1; }
+  .tab-item.active .tab-icon { transform: translateY(-3px); }
+  .tab-item.active .tab-icon :global(svg) { filter: drop-shadow(0 0 8px rgba(108,92,231,0.7)); }
+  .tab-icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; transition: transform 0.22s var(--spring-bounce), filter 0.22s; }
+  .tab-label { font-size: 10px; font-weight: 500; letter-spacing: -0.02em; transition: color 0.22s; }
 </style>
