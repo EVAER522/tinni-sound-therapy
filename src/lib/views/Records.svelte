@@ -98,9 +98,9 @@
                   </linearGradient>
                 </defs>
                 <!-- Grid lines -->
-                <line x1={padding} y1={padding} x2={width-padding} y2={padding} stroke="rgba(255,255,255,0.05)" />
-                <line x1={padding} y1={height/2} x2={width-padding} y2={height/2} stroke="rgba(255,255,255,0.05)" />
-                <line x1={padding} y1={height-padding} x2={width-padding} y2={height-padding} stroke="rgba(255,255,255,0.1)" />
+                <line x1={padding} y1={padding} x2={width-padding} y2={padding} class="chart-grid" />
+                <line x1={padding} y1={height/2} x2={width-padding} y2={height/2} class="chart-grid" />
+                <line x1={padding} y1={height-padding} x2={width-padding} y2={height-padding} class="chart-grid chart-grid-base" />
                 
                 <!-- Area path -->
                 <path d={getSvgAreaPath(freqData, 'frequency', width, height, padding)} fill="url(#freqAreaGrad)" />
@@ -111,7 +111,7 @@
                 {#each freqData as d, i}
                   {@const x = padding + (i / (freqData.length - 1)) * (width - 2 * padding)}
                   {@const y = height - padding - ((d.frequency - minVal) / range) * (height - 2 * padding)}
-                  <circle cx={x} cy={y} r="5" fill="#fff" stroke="var(--accent-blue-purple)" stroke-width="2.5" />
+                  <circle cx={x} cy={y} r="5" class="chart-dot" stroke="var(--accent-blue-purple)" stroke-width="2.5" />
                   {#if i === 0 || i === freqData.length - 1 || freqData.length < 8}
                     <text x={x} y={y - 12} text-anchor="middle" font-size="10" fill="var(--text-secondary)" font-weight="600">{Math.round(d.frequency)}Hz</text>
                     <text x={x} y={height - 12} text-anchor="middle" font-size="9" fill="var(--text-tertiary)">{d.date.substring(5)}</text>
@@ -143,9 +143,9 @@
                   </linearGradient>
                 </defs>
                 <!-- Grid lines -->
-                <line x1={padding} y1={padding} x2={width-padding} y2={padding} stroke="rgba(255,255,255,0.05)" />
-                <line x1={padding} y1={height/2} x2={width-padding} y2={height/2} stroke="rgba(255,255,255,0.05)" />
-                <line x1={padding} y1={height-padding} x2={width-padding} y2={height-padding} stroke="rgba(255,255,255,0.1)" />
+                <line x1={padding} y1={padding} x2={width-padding} y2={padding} class="chart-grid" />
+                <line x1={padding} y1={height/2} x2={width-padding} y2={height/2} class="chart-grid" />
+                <line x1={padding} y1={height-padding} x2={width-padding} y2={height-padding} class="chart-grid chart-grid-base" />
                 
                 <!-- Area path -->
                 <path d={getSvgAreaPath(severityData, 'severity_before', width, height, padding)} fill="url(#sevAreaGrad)" />
@@ -156,7 +156,7 @@
                 {#each severityData as d, i}
                   {@const x = padding + (i / (severityData.length - 1)) * (width - 2 * padding)}
                   {@const y = height - padding - ((d.severity_before - minVal) / range) * (height - 2 * padding)}
-                  <circle cx={x} cy={y} r="5" fill="#fff" stroke="#2997ff" stroke-width="2.5" />
+                  <circle cx={x} cy={y} r="5" class="chart-dot" stroke="#2997ff" stroke-width="2.5" />
                   {#if i === 0 || i === severityData.length - 1 || severityData.length < 8}
                     <text x={x} y={y - 12} text-anchor="middle" font-size="10" fill="var(--text-secondary)" font-weight="600">{d.severity_before}</text>
                     <text x={x} y={height - 12} text-anchor="middle" font-size="9" fill="var(--text-tertiary)">{d.date.substring(5)}</text>
@@ -241,4 +241,10 @@
   fill: var(--text-secondary);
   font-family: inherit;
 }
+.chart-grid { stroke: rgba(255,255,255,0.06); fill: none; }
+.chart-grid-base { stroke: rgba(255,255,255,0.12); }
+.chart-dot { fill: rgba(255,255,255,0.9); }
+/* view-toggle alias for glass-segmented-btn */
+.glass-segmented-btn { padding: 6px 14px; border-radius: 11px; font-size: 14px; font-weight: 500; color: var(--text-secondary); background: transparent; border: none; cursor: pointer; transition: all .15s; }
+.glass-segmented-btn.active { background: var(--glass-bg-heavy); color: var(--text-primary); }
 </style>

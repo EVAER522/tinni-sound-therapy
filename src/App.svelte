@@ -70,6 +70,7 @@
 
 <style>
   .app-root { height: 100vh; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+  .app-root.light-mode { background: #f2f2f7; }
   .bg-layer { position: fixed; inset: 0; z-index: 0; transition: background-image 0.8s ease; }
   .top-layer { position: fixed; top: 0; left: 0; right: 0; z-index: 50; padding: 8px 12px 0; pointer-events: none; display: flex; justify-content: center; }
   .top-layer :global(.top-right-wrapper) { position: fixed; right: 12px; top: 8px; z-index: 55; pointer-events: auto; }
