@@ -241,29 +241,123 @@
     const d=new Uint8Array(bl);
     const w=c.width,h=c.height;
     const sr=getAudioContext().sampleRate;
+    
+    // Logarithmic scale parameters
+    const minFreq = 80;
+    const maxFreq = 16000;
+    const logMin = Math.log(minFreq);
+    const logMax = Math.log(maxFreq);
+    
     function draw(){
       if(!isDrawing)return;
       spectrumAnimFrame=requestAnimationFrame(draw);
       a.getByteFrequencyData(d);
       c2d.clearRect(0,0,w,h);
-      const bw=w/bl;
-      for(let i=0;i<bl;i++){
-        const bh=(d[i]/255)*h;
-        const o=0.3+(d[i]/255)*0.7;
-        c2d.fillStyle="rgba(0,102,204,"+o+")";
-        c2d.fillRect(i*bw,h-bh,Math.max(bw-0.5,1),bh);
-      }
-      if($notchParams.left.frequency){
-        const x=($notchParams.left.frequency/(sr/2))*w;
-        c2d.strokeStyle="rgba(41,151,255,0.8)";
-        c2d.lineWidth=2;
+      
+      // 1. Draw notch band highlight (background layer)
+      if ($notchParams.left.frequency) {
+        const fc = $notchParams.left.frequency;
+        const bwId = $notchParams.left.bandwidth || "medium";
+        const octaves = bwId === "narrow" ? 0.3333 : bwId === "wide" ? 1.0 : 0.5;
+        const f1 = fc * Math.pow(2, -octaves / 2);
+        const f2 = fc * Math.pow(2, octaves / 2);
+        
+        let x1 = 0;
+        if (f1 > minFreq) {
+          x1 = ((Math.log(f1) - logMin) / (logMax - logMin)) * w;
+        }
+        let x2 = w;
+        if (f2 < maxFreq) {
+          x2 = ((Math.log(f2) - logMin) / (logMax - logMin)) * w;
+        }
+        x1 = Math.max(0, Math.min(w, x1));
+        x2 = Math.max(0, Math.min(w, x2));
+        
+        // Draw soft highlighting band
+        c2d.fillStyle = "rgba(108, 92, 231, 0.08)";
+        c2d.fillRect(x1, 0, x2 - x1, h);
+        
+        // Draw dashed borders for filter limits
+        c2d.strokeStyle = "rgba(108, 92, 231, 0.22)";
+        c2d.lineWidth = 1;
+        c2d.setLineDash([4, 4]);
         c2d.beginPath();
-        c2d.moveTo(x,0);
-        c2d.lineTo(x,h);
+        c2d.moveTo(x1, 0); c2d.lineTo(x1, h);
+        c2d.moveTo(x2, 0); c2d.lineTo(x2, h);
         c2d.stroke();
-        c2d.fillStyle="rgba(41,151,255,0.9)";
-        c2d.font="11px Inter, sans-serif";
-        c2d.fillText(Math.round($notchParams.left.frequency)+" Hz",x+4,14);
+        c2d.setLineDash([]); // reset dash
+      }
+      
+      // 2. Draw spectrum curve (foreground layer)
+      c2d.beginPath();
+      let first = true;
+      for (let x = 0; x <= w; x += 2) {
+        const pct = x / w;
+        const f = Math.exp(logMin + pct * (logMax - logMin));
+        const binIndex = (f / (sr / 2)) * bl;
+        
+        const indexFloor = Math.floor(binIndex);
+        const indexCeil = Math.min(bl - 1, indexFloor + 1);
+        const weight = binIndex - indexFloor;
+        let val = 0;
+        if (indexFloor < bl) {
+          val = d[indexFloor] * (1 - weight) + d[indexCeil] * weight;
+        }
+        
+        const bh = (val / 255) * h * 0.78;
+        if (first) {
+          c2d.moveTo(x, h - bh);
+          first = false;
+        } else {
+          c2d.lineTo(x, h - bh);
+        }
+      }
+      
+      // Store current path, draw stroke
+      c2d.strokeStyle = "rgba(162, 155, 254, 0.85)";
+      c2d.lineWidth = 2.5;
+      c2d.stroke();
+      
+      // Close path to draw gradient fill
+      c2d.lineTo(w, h);
+      c2d.lineTo(0, h);
+      c2d.closePath();
+      
+      const grad = c2d.createLinearGradient(0, 0, 0, h);
+      const isLightMode = document.body.classList.contains("light-mode");
+      if (isLightMode) {
+        grad.addColorStop(0, "rgba(108, 92, 231, 0.35)");
+        grad.addColorStop(1, "rgba(116, 185, 255, 0.02)");
+      } else {
+        grad.addColorStop(0, "rgba(108, 92, 231, 0.55)");
+        grad.addColorStop(1, "rgba(116, 185, 255, 0.03)");
+      }
+      c2d.fillStyle = grad;
+      c2d.fill();
+      
+      // 3. Draw center frequency indicator line and label
+      if ($notchParams.left.frequency) {
+        const fc = $notchParams.left.frequency;
+        let xc = 0;
+        if (fc >= minFreq && fc <= maxFreq) {
+          xc = ((Math.log(fc) - logMin) / (logMax - logMin)) * w;
+        } else if (fc < minFreq) {
+          xc = 0;
+        } else {
+          xc = w;
+        }
+        xc = Math.max(0, Math.min(w, xc));
+        
+        c2d.strokeStyle = "rgba(41, 151, 255, 0.8)";
+        c2d.lineWidth = 1.5;
+        c2d.beginPath();
+        c2d.moveTo(xc, 0);
+        c2d.lineTo(xc, h);
+        c2d.stroke();
+        
+        c2d.fillStyle = "rgba(41, 151, 255, 0.9)";
+        c2d.font = "11px Inter, sans-serif";
+        c2d.fillText(Math.round(fc) + " Hz", xc + 6, 16);
       }
     }
     spectrumAnimFrame=requestAnimationFrame(draw);

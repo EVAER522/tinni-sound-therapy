@@ -13,7 +13,8 @@ export function getAudioContext() {
     masterGain.connect(audioCtx.destination);
 
     analyserNode = audioCtx.createAnalyser();
-    analyserNode.fftSize = 256;
+    analyserNode.fftSize = 2048;
+    analyserNode.smoothingTimeConstant = 0.88;
     masterGain.connect(analyserNode);
   }
   if (audioCtx.state === 'suspended' && !isSuspendedIntentionally) {
